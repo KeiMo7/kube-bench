@@ -106,11 +106,50 @@ Will return 42 if one check or more failed, and 0 incase none failed.
 
 #### Output manipulation flags
 
-There are four output states:
+There are five output states:
 - [PASS] indicates that the test was run successfully, and passed.
 - [FAIL] indicates that the test was run successfully, and failed. The remediation output describes how to correct the configuration, or includes an error message describing why the test could not be run.
 - [WARN] means this test needs further attention, for example it is a test that needs to be run manually. Check the remediation output for further information.
 - [INFO] is informational output that needs no further action.
+- [NOT_APPLICABLE] means the check belongs to a role that is not present on this machine, so it was not run. It is counted in its own `total_not_applicable` total, is never added to `total_fail`, and never affects the exit code.
+
+#### Machine roles and coverage
+
+`kube-bench` determines what a machine does from observable facts only: which
+configured components are running on it (probed with `ps`) and which targets
+were explicitly named on the command line. It never infers a role from the
+hostname, an environment variable or a directory layout.
+
+- A machine running only `kubelet`/`kube-proxy` is a **workload** machine. Its
+  control-plane and etcd checks are reported as `NOT_APPLICABLE`.
+- A machine running only `kube-apiserver`, `kube-scheduler` and
+  `kube-controller-manager` is a **control-plane** machine. Its worker checks
+  are reported as `NOT_APPLICABLE`.
+- A machine running both is **mixed**. Both check sets run and are concluded;
+  there is no picking one role over the other. If the same check identifier is
+  produced by more than one role's controls, the result is kept once, the more
+  severe verdict wins, and the surviving check carries `sources` (and
+  `source_states`) so the origin of each result is visible.
+- If the role cannot be established (no components observed, or `ps` is missing
+  or not executable), `kube-bench` does **not** silently skip anything. Every
+  role-dependent target is executed and marked with coverage state `uncovered`
+  (JSON `applicability.state`), together with a `reason_code` explaining why.
+
+The determination and its evidence are part of the report: `role.roles`,
+`role.determined`, `role.source`, `role.reason_code`, `role.reason` and
+`role.evidence` in JSON totals (and on each control when `--nototals` is used).
+`coverage` reports how many checks were `covered`, how many were
+`not_applicable` and `deduplicated`, and a `reasons` map that breaks the
+trimmed checks down by reason code. The same information is printed on stdout
+as a `== Coverage ==` block whenever checks were trimmed or a role could not be
+established.
+
+An explicitly specified target (for example `kube-bench run --targets master`)
+is always covered, exactly as before. Automatic role trimming still applies to
+the targets that were not named explicitly.
+
+Trimming only decides whether a check runs. It never changes a check's audit
+command, comparison operator or threshold.
 
 Note:
 - Some tests with `Automated` in their description must still be run manually
@@ -118,6 +157,7 @@ Note:
 - If the test is Scored, and kube-bench was unable to run the test, this generates FAIL (because the test has not been passed, and as a Scored test, if it doesn't pass then it must be considered a failure).
 - If the test is Not Scored, and kube-bench was unable to run the test, this generates WARN.
 - If the test is Scored, type is empty, and there are no `test_items` present, it generates a WARN. This is to highlight tests that appear to be incompletely defined.
+- If a check is out of scope for the machine's role, it is NOT_APPLICABLE. This is not a failure: it is excluded from the fail total, from the JUnit failure count and from the exit code. `--skip`ped checks keep their existing INFO behaviour.
 
 `kube-bench` supports multiple output manipulation flags. 
 `kube-bench --include-test-output` will print failing checks output in the results section

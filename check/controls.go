@@ -43,6 +43,24 @@ const (
 type OverallControls struct {
 	Controls []*Controls
 	Totals   Summary
+	// Role is the machine-level role determination and its evidence.
+	Role *RoleReport `json:"role,omitempty"`
+	// Coverage aggregates how many checks were covered, trimmed and
+	// de-duplicated across every target in this report.
+	Coverage *Coverage `json:"coverage,omitempty"`
+}
+
+// Coverage aggregates applicability accounting for a whole report.
+type Coverage struct {
+	// Covered is the number of checks that were executed.
+	Covered int `json:"covered"`
+	// NotApplicable is the number of checks trimmed as not applicable.
+	NotApplicable int `json:"not_applicable"`
+	// Deduplicated is the number of duplicate check results folded away.
+	Deduplicated int `json:"deduplicated,omitempty"`
+	// Reasons maps a stable reason code to the number of trimmed checks that
+	// carry it, so a reader can tell why checks were left out.
+	Reasons map[string]int `json:"reasons,omitempty"`
 }
 
 // Controls holds all controls to check for master nodes.
@@ -53,19 +71,28 @@ type Controls struct {
 	Text            string   `json:"text"`
 	Type            NodeType `json:"node_type"`
 	Groups          []*Group `json:"tests"`
+	// Role is the machine-level role determination shared by every target in
+	// this report. It is repeated here so that --nototals output still
+	// carries the determination and its evidence.
+	Role *RoleReport `json:"role,omitempty"`
+	// Applicability explains the coverage decision for this target.
+	Applicability *Applicability `json:"applicability,omitempty"`
 	Summary
 }
 
 // Group is a collection of similar checks.
 type Group struct {
-	ID     string   `yaml:"id" json:"section"`
-	Type   string   `yaml:"type" json:"type"`
-	Pass   int      `json:"pass"`
-	Fail   int      `json:"fail"`
-	Warn   int      `json:"warn"`
-	Info   int      `json:"info"`
-	Text   string   `json:"desc"`
-	Checks []*Check `json:"results"`
+	ID   string `yaml:"id" json:"section"`
+	Type string `yaml:"type" json:"type"`
+	Pass int    `json:"pass"`
+	Fail int    `json:"fail"`
+	Warn int    `json:"warn"`
+	Info int    `json:"info"`
+	// NotApplicable counts checks trimmed because their role is not present.
+	// It is never added to Fail.
+	NotApplicable int      `json:"not_applicable,omitempty"`
+	Text          string   `json:"desc"`
+	Checks        []*Check `json:"results"`
 }
 
 // Summary is a summary of the results of control checks run.
@@ -74,6 +101,9 @@ type Summary struct {
 	Fail int `json:"total_fail"`
 	Warn int `json:"total_warn"`
 	Info int `json:"total_info"`
+	// NotApplicable is reported separately from Fail so that trimmed checks
+	// never inflate the failure total or the exit code.
+	NotApplicable int `json:"total_not_applicable,omitempty"`
 }
 
 // Predicate a predicate on the given Group and Check arguments.
@@ -99,7 +129,7 @@ func NewControls(t NodeType, in []byte, detectedVersion string) (*Controls, erro
 func (controls *Controls) RunChecks(runner Runner, filter Predicate, skipIDMap map[string]bool) Summary {
 	var g []*Group
 	m := make(map[string]*Group)
-	controls.Summary.Pass, controls.Summary.Fail, controls.Summary.Warn, controls.Info = 0, 0, 0, 0
+	controls.Summary = Summary{}
 
 	for _, group := range controls.Groups {
 		for _, check := range group.Checks {
@@ -158,7 +188,7 @@ func (controls *Controls) JUnit() ([]byte, error) {
 	suite := reporters.JUnitTestSuite{
 		Name:      controls.Text,
 		TestCases: []reporters.JUnitTestCase{},
-		Tests:     controls.Summary.Pass + controls.Summary.Fail + controls.Summary.Info + controls.Summary.Warn,
+		Tests:     controls.Summary.Pass + controls.Summary.Fail + controls.Summary.Info + controls.Summary.Warn + controls.Summary.NotApplicable,
 		Failures:  controls.Summary.Fail,
 	}
 	for _, g := range controls.Groups {
@@ -181,9 +211,11 @@ func (controls *Controls) JUnit() ([]byte, error) {
 			switch check.State {
 			case FAIL:
 				tc.FailureMessage = &reporters.JUnitFailureMessage{Message: check.Remediation}
-			case WARN, INFO:
-				// WARN and INFO are two different versions of skipped tests. Either way it would be a false positive/negative to report
-				// it any other way.
+			case WARN, INFO, NOT_APPLICABLE:
+				// WARN and INFO are two different versions of skipped tests, and
+				// NOT_APPLICABLE means the check was out of scope for this
+				// machine. Either way it would be a false positive/negative to
+				// report it any other way.
 				tc.Skipped = &reporters.JUnitSkipped{}
 			case PASS:
 			default:
@@ -309,6 +341,8 @@ func summarize(controls *Controls, state State) {
 		controls.Summary.Warn++
 	case INFO:
 		controls.Summary.Info++
+	case NOT_APPLICABLE:
+		controls.Summary.NotApplicable++
 	default:
 		glog.Warningf("Unrecognized state %s", state)
 	}
@@ -324,6 +358,8 @@ func summarizeGroup(group *Group, state State) {
 		group.Warn++
 	case INFO:
 		group.Info++
+	case NOT_APPLICABLE:
+		group.NotApplicable++
 	default:
 		glog.Warningf("Unrecognized state %s", state)
 	}

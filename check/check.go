@@ -65,26 +65,34 @@ const (
 // Check contains information about a recommendation in the
 // CIS Kubernetes document.
 type Check struct {
-	ID                string   `yaml:"id" json:"test_number"`
-	Text              string   `json:"test_desc"`
-	Audit             string   `json:"audit"`
-	AuditEnv          string   `yaml:"audit_env"`
-	AuditConfig       string   `yaml:"audit_config"`
-	Type              string   `json:"type"`
-	Tests             *tests   `json:"-"`
-	Set               bool     `json:"-"`
-	Remediation       string   `json:"remediation"`
-	TestInfo          []string `json:"test_info"`
-	State             `json:"status"`
-	ActualValue       string `json:"actual_value"`
-	Scored            bool   `json:"scored"`
-	IsMultiple        bool   `yaml:"use_multiple_values"`
-	ExpectedResult    string `json:"expected_result"`
-	Reason            string `json:"reason,omitempty"`
-	AuditOutput       string `json:"-"`
-	AuditEnvOutput    string `json:"-"`
-	AuditConfigOutput string `json:"-"`
-	DisableEnvTesting bool   `json:"-"`
+	ID             string   `yaml:"id" json:"test_number"`
+	Text           string   `json:"test_desc"`
+	Audit          string   `json:"audit"`
+	AuditEnv       string   `yaml:"audit_env"`
+	AuditConfig    string   `yaml:"audit_config"`
+	Type           string   `json:"type"`
+	Tests          *tests   `json:"-"`
+	Set            bool     `json:"-"`
+	Remediation    string   `json:"remediation"`
+	TestInfo       []string `json:"test_info"`
+	State          `json:"status"`
+	ActualValue    string `json:"actual_value"`
+	Scored         bool   `json:"scored"`
+	IsMultiple     bool   `yaml:"use_multiple_values"`
+	ExpectedResult string `json:"expected_result"`
+	Reason         string `json:"reason,omitempty"`
+	// ReasonCode is a stable machine-readable reason for a non-default state
+	// such as NOT_APPLICABLE or an undetermined role.
+	ReasonCode string `json:"reason_code,omitempty"`
+	// Sources lists every control target that produced this check identifier
+	// when the result was de-duplicated across roles.
+	Sources []string `json:"sources,omitempty"`
+	// SourceStates records the per-source state for a de-duplicated check.
+	SourceStates      map[string]string `json:"source_states,omitempty"`
+	AuditOutput       string            `json:"-"`
+	AuditEnvOutput    string            `json:"-"`
+	AuditConfigOutput string            `json:"-"`
+	DisableEnvTesting bool              `json:"-"`
 }
 
 // Runner wraps the basic Run method.

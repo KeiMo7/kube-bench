@@ -61,6 +61,8 @@ var (
 	outputFile           string
 	configFileError      error
 	controlsCollection   []*check.Controls
+	activeRoleReport     *check.RoleReport
+	activeManualTargets  map[check.NodeType]bool
 )
 
 // RootCmd represents the base command when called without any subcommands
@@ -75,66 +77,36 @@ var RootCmd = &cobra.Command{
 		}
 		glog.V(1).Infof("Running checks for benchmark %v", bv)
 
-		if isMaster() {
-			glog.V(1).Info("== Running master checks ==")
-			runChecks(check.MASTER, loadConfig(check.MASTER, bv), detecetedKubeVersion)
+		// Determine the machine role once, from observable facts (running
+		// components and any explicitly requested scope), so that every target
+		// in this run is trimmed consistently.
+		setRunContext(newRoleReport(viper.GetViper(), nil), nil)
 
-			// Control Plane is only valid for CIS 1.5 and later,
-			// this a gatekeeper for previous versions
-			valid, err := validTargets(bv, []string{string(check.CONTROLPLANE)}, viper.GetViper())
+		runTargetIfValid := func(target check.NodeType) {
+			valid, err := validTargets(bv, []string{string(target)}, viper.GetViper())
 			if err != nil {
 				exitWithError(fmt.Errorf("error validating targets: %v", err))
 			}
-			if valid {
-				glog.V(1).Info("== Running control plane checks ==")
-				runChecks(check.CONTROLPLANE, loadConfig(check.CONTROLPLANE, bv), detecetedKubeVersion)
+			if !valid {
+				glog.V(1).Infof("== Skipping %s checks: not configured for %s ==", target, bv)
+				return
 			}
-		} else {
-			glog.V(1).Info("== Skipping master checks ==")
+			glog.V(1).Infof("== Running %s checks ==", target)
+			runChecks(target, loadConfig(target, bv), detecetedKubeVersion)
 		}
 
-		// Etcd is only valid for CIS 1.5 and later,
-		// this a gatekeeper for previous versions.
-		valid, err := validTargets(bv, []string{string(check.ETCD)}, viper.GetViper())
-		if err != nil {
-			exitWithError(fmt.Errorf("error validating targets: %v", err))
-		}
-		if valid && isEtcd() {
-			glog.V(1).Info("== Running etcd checks ==")
-			runChecks(check.ETCD, loadConfig(check.ETCD, bv), detecetedKubeVersion)
-		} else {
-			glog.V(1).Info("== Skipping etcd checks ==")
-		}
+		// Every candidate target is considered. Targets whose role is not
+		// present on this machine are reported as NOT_APPLICABLE rather than
+		// silently dropped; targets whose role cannot be established are
+		// still executed and reported as undetermined.
+		runTargetIfValid(check.MASTER)
+		runTargetIfValid(check.CONTROLPLANE)
+		runTargetIfValid(check.ETCD)
+		runTargetIfValid(check.NODE)
+		runTargetIfValid(check.POLICIES)
+		runTargetIfValid(check.MANAGEDSERVICES)
 
-		glog.V(1).Info("== Running node checks ==")
-		runChecks(check.NODE, loadConfig(check.NODE, bv), detecetedKubeVersion)
-
-		// Policies is only valid for CIS 1.5 and later,
-		// this a gatekeeper for previous versions.
-		valid, err = validTargets(bv, []string{string(check.POLICIES)}, viper.GetViper())
-		if err != nil {
-			exitWithError(fmt.Errorf("error validating targets: %v", err))
-		}
-		if valid {
-			glog.V(1).Info("== Running policies checks ==")
-			runChecks(check.POLICIES, loadConfig(check.POLICIES, bv), detecetedKubeVersion)
-		} else {
-			glog.V(1).Info("== Skipping policies checks ==")
-		}
-
-		// Managedservices is only valid for GKE 1.0 and later,
-		// this a gatekeeper for previous versions.
-		valid, err = validTargets(bv, []string{string(check.MANAGEDSERVICES)}, viper.GetViper())
-		if err != nil {
-			exitWithError(fmt.Errorf("error validating targets: %v", err))
-		}
-		if valid {
-			glog.V(1).Info("== Running managed services checks ==")
-			runChecks(check.MANAGEDSERVICES, loadConfig(check.MANAGEDSERVICES, bv), detecetedKubeVersion)
-		} else {
-			glog.V(1).Info("== Skipping managed services checks ==")
-		}
-
+		finalizeCollection(controlsCollection)
 		writeOutput(controlsCollection)
 		os.Exit(exitCodeSelection(controlsCollection))
 	},

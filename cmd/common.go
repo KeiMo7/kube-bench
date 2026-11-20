@@ -119,8 +119,73 @@ func runChecks(nodetype check.NodeType, testYamlFile, detectedVersion string) {
 
 	generateDefaultEnvAudit(controls, binSubs)
 
-	controls.RunChecks(runner, filter, parseSkipIds(skipIds))
+	applyApplicability(controls, nodetype, runner, filter)
 	controlsCollection = append(controlsCollection, controls)
+}
+
+// applyApplicability records the role decision for a target and either runs
+// its checks or marks them NOT_APPLICABLE.
+//
+// Trimming only decides whether a check runs. It never changes a check's own
+// audit command, comparison operator or threshold: a covered check goes
+// through exactly the same path as before.
+func applyApplicability(controls *check.Controls, nodetype check.NodeType, runner check.Runner, filter check.Predicate) {
+	applyDecision(controls, targetDecision(nodetype), runner, filter)
+}
+
+// applyDecision records a resolved coverage decision on a target and either
+// runs its checks or marks them NOT_APPLICABLE.
+func applyDecision(controls *check.Controls, decision applicabilityDecision, runner check.Runner, filter check.Predicate) {
+	controls.Role = activeRoleReport
+	controls.Applicability = &check.Applicability{
+		State:      decision.State,
+		ReasonCode: decision.ReasonCode,
+		Reason:     decision.Reason,
+		Source:     decision.Source,
+		Evidence:   decision.Evidence,
+	}
+
+	if decision.State == check.ApplicabilityNotApplicable {
+		reasonCode := decision.ReasonCode
+		if reasonCode == "" {
+			reasonCode = check.ReasonRoleNotObserved
+		}
+		controls.MarkNotApplicable(filter, reasonCode, decision.Reason)
+	} else {
+		controls.RunChecks(runner, filter, parseSkipIds(skipIds))
+	}
+
+	controls.Applicability.Covered = controls.Pass + controls.Fail + controls.Warn + controls.Info
+	controls.Applicability.NotApplicable = controls.NotApplicable
+}
+
+// setRunContext records the role determination and the explicitly specified
+// targets for the current run. Both are observable facts: the former comes
+// from probing running components, the latter from the command line.
+func setRunContext(report *check.RoleReport, targets []string) {
+	activeRoleReport = report
+	activeManualTargets = make(map[check.NodeType]bool)
+	for _, target := range targets {
+		activeManualTargets[check.NodeType(translate(target))] = true
+	}
+	logRoleReport(report)
+}
+
+// finalizeCollection de-duplicates results that the same check identifier
+// produced under several roles and refreshes the coverage accounting. Only
+// role-bearing targets take part in de-duplication, so cluster-scoped
+// policies keep their existing behaviour.
+func finalizeCollection(collection []*check.Controls) {
+	check.Deduplicate(collection, func(c *check.Controls) bool {
+		return isRoleTarget(c.Type)
+	})
+	for _, controls := range collection {
+		if controls.Applicability == nil {
+			continue
+		}
+		controls.Applicability.Covered = controls.Pass + controls.Fail + controls.Warn + controls.Info
+		controls.Applicability.NotApplicable = controls.NotApplicable
+	}
 }
 
 func generateDefaultEnvAudit(controls *check.Controls, binSubs []string) {
@@ -168,6 +233,11 @@ func prettyPrint(r *check.Controls, summary check.Summary) {
 	// Print check results.
 	if !noResults {
 		colorPrint(check.INFO, fmt.Sprintf("%s %s\n", r.ID, r.Text))
+		if r.Applicability != nil && r.Applicability.State != check.ApplicabilityCovered {
+			// Make the coverage conclusion readable next to the results it
+			// applies to, not only in the end-of-run coverage block.
+			colorPrint(check.INFO, fmt.Sprintf("Coverage: %s\n", r.Applicability.String()))
+		}
 		for _, g := range r.Groups {
 			colorPrint(check.INFO, fmt.Sprintf("%s %s\n", g.ID, g.Text))
 			for _, c := range g.Checks {
@@ -222,9 +292,15 @@ func printSummary(summary check.Summary, sectionName string) {
 	}
 
 	colors[res].Printf("== Summary %s ==\n", sectionName)
-	fmt.Printf("%d checks PASS\n%d checks FAIL\n%d checks WARN\n%d checks INFO\n\n",
+	fmt.Printf("%d checks PASS\n%d checks FAIL\n%d checks WARN\n%d checks INFO\n",
 		summary.Pass, summary.Fail, summary.Warn, summary.Info,
 	)
+	if summary.NotApplicable > 0 {
+		// Reported on its own line so it can never be confused with, or
+		// added to, the FAIL total.
+		fmt.Printf("%d checks NOT APPLICABLE\n", summary.NotApplicable)
+	}
+	fmt.Println()
 }
 
 // loadConfig finds the correct config dir based on the kubernetes version,
@@ -426,6 +502,12 @@ func writeJSONOutput(controlsCollection []*check.Controls) {
 		var totals check.OverallControls
 		totals.Controls = controlsCollection
 		totals.Totals = getSummaryTotals(controlsCollection)
+		totals.Role = activeRoleReport
+		if activeRoleReport != nil {
+			// Coverage is only meaningful for a real role-aware run. Reports
+			// assembled without a role context keep their previous shape.
+			totals.Coverage = buildCoverage(controlsCollection)
+		}
 		out, err = json.Marshal(totals)
 	} else {
 		out, err = json.Marshal(controlsCollection)
@@ -482,6 +564,54 @@ func writeStdoutOutput(controlsCollection []*check.Controls) {
 	if !noTotals {
 		printSummary(getSummaryTotals(controlsCollection), "total")
 	}
+	printCoverage(controlsCollection)
+}
+
+// printCoverage prints the role determination and coverage accounting when it
+// carries information the per-check listing does not already convey. On a
+// single-role machine with nothing trimmed this prints nothing, so the
+// long-standing stdout layout is unchanged.
+func printCoverage(controlsCollection []*check.Controls) {
+	if noSummary {
+		return
+	}
+
+	coverage := buildCoverage(controlsCollection)
+	report := activeRoleReport
+
+	interesting := coverage.NotApplicable > 0 || coverage.Deduplicated > 0 ||
+		(report != nil && (report.Fallback || report.Reason != ""))
+	if !interesting {
+		return
+	}
+
+	if report != nil {
+		colorPrint(check.INFO, fmt.Sprintf("Machine roles: %s (determined=%t, source=%s)\n",
+			strings.Join(report.Roles, ","), report.Determined, report.Source))
+		if report.Reason != "" {
+			colorPrint(check.INFO, fmt.Sprintf("Role determination: %s\n", report.Reason))
+		}
+		for _, ev := range report.Evidence {
+			colorPrint(check.INFO, fmt.Sprintf("Role evidence: %s\n", ev))
+		}
+	}
+
+	colors[check.INFO].Printf("== Coverage ==\n")
+	fmt.Printf("%d checks covered\n%d checks not applicable\n", coverage.Covered, coverage.NotApplicable)
+	if coverage.Deduplicated > 0 {
+		fmt.Printf("%d checks deduplicated\n", coverage.Deduplicated)
+	}
+	if len(coverage.Reasons) > 0 {
+		codes := make([]string, 0, len(coverage.Reasons))
+		for code := range coverage.Reasons {
+			codes = append(codes, code)
+		}
+		sort.Strings(codes)
+		for _, code := range codes {
+			fmt.Printf("%d checks trimmed: %s\n", coverage.Reasons[code], code)
+		}
+	}
+	fmt.Println()
 }
 
 func getSummaryTotals(controlsCollection []*check.Controls) check.Summary {
@@ -492,6 +622,7 @@ func getSummaryTotals(controlsCollection []*check.Controls) check.Summary {
 		totalSummary.Warn = totalSummary.Warn + summary.Warn
 		totalSummary.Pass = totalSummary.Pass + summary.Pass
 		totalSummary.Info = totalSummary.Info + summary.Info
+		totalSummary.NotApplicable = totalSummary.NotApplicable + summary.NotApplicable
 	}
 	return totalSummary
 }
@@ -520,7 +651,10 @@ func printOutput(output string, outputFile string) {
 	} else {
 		err := writeOutputToFile(output, outputFile)
 		if err != nil {
-			exitWithError(fmt.Errorf("Failed to write to output file %s: %v", outputFile, err))
+			// A failure to persist the report must not change the scan
+			// conclusion or its exit code. Report it on stderr and keep going.
+			fmt.Fprintf(os.Stderr, "\nFailed to write to output file %s: %v\n", outputFile, err)
+			glog.Errorf("Failed to write to output file %s: %v", outputFile, err)
 		}
 	}
 }

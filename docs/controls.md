@@ -263,6 +263,17 @@ If you decide that a recommendation is not appropriate for your environment, you
 
 No tests will be run for this check and the output will be marked [INFO].
 
+## Checks that do not apply to the machine
+
+Checks are also omitted automatically when they belong to a role the machine
+does not run, for example control-plane checks on a workload-only node. These
+are marked [NOT_APPLICABLE] rather than [FAIL], are counted in
+`total_not_applicable`, and are excluded from `total_fail` and from the exit
+code. Trimming is driven only by observable facts (running components and
+explicitly requested targets); see
+[flags and commands](flags-and-commands.md#machine-roles-and-coverage) for the
+full rules.
+
 ## Configuration and Variables
 
 Kubernetes component configuration and binary file locations and names 

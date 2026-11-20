@@ -74,12 +74,18 @@ func run(targets []string, benchmarkVersion string) (err error) {
 
 	glog.V(3).Infof("Running tests from files %v\n", yamlFiles)
 
+	// Determine the machine role once for the whole run. Explicitly named
+	// targets count as observable evidence, so `run --targets master` keeps
+	// working exactly as before while unspecified role targets are trimmed.
+	setRunContext(newRoleReport(viper.GetViper(), targets), targets)
+
 	for _, yamlFile := range yamlFiles {
 		_, name := filepath.Split(yamlFile)
 		testType := check.NodeType(strings.Split(name, ".")[0])
 		runChecks(testType, yamlFile, detecetedKubeVersion)
 	}
 
+	finalizeCollection(controlsCollection)
 	writeOutput(controlsCollection)
 	return nil
 }
