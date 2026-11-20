@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -123,6 +124,35 @@ func runChecks(nodetype check.NodeType, testYamlFile, detectedVersion string) {
 	controlsCollection = append(controlsCollection, controls)
 }
 
+// applyRootCauseAnalysis runs the single global pass once all sections have
+// executed. Doing it here, rather than per section, is what lets a check
+// depend on a check in another section. States and summaries are unchanged.
+func applyRootCauseAnalysis(controlsCollection []*check.Controls) {
+	if !rootCause {
+		return
+	}
+	cfg, err := check.ReadRootCauseConfig(rootCauseConfig)
+	if err != nil {
+		// Misconfiguration must be explicit, not silently ignored.
+		exitWithError(err)
+	}
+	// The baseline is loaded here so both the default command and the `run`
+	// subcommand honour it; the subcommand does not execute the root Run hook.
+	if rootCauseBaselinePath != "" && rootCauseBaseline == nil {
+		baseline, err := loadRootCauseBaseline(rootCauseBaselinePath)
+		if err != nil {
+			exitWithError(err)
+		}
+		rootCauseBaseline = baseline
+	}
+	report, err := check.AnalyzeControls(controlsCollection, cfg, rootCauseBaseline)
+	if err != nil {
+		// A cycle names the checks on it and stops before any statistics.
+		exitWithError(err)
+	}
+	rootCauseReport = report
+}
+
 func generateDefaultEnvAudit(controls *check.Controls, binSubs []string) {
 	for _, group := range controls.Groups {
 		for _, checkItem := range group.Checks {
@@ -209,6 +239,52 @@ func prettyPrint(r *check.Controls, summary check.Summary) {
 	if !noSummary {
 		printSummary(summary, string(r.Type))
 	}
+}
+
+// printRootCause renders the grouped root cause report for the whole run.
+func printRootCause(r *check.RootCauseReport) {
+	colors[check.INFO].Printf("== Root causes ==\n")
+	if r.Degraded {
+		fmt.Printf("root cause grouping was not applied: %s\n", r.Note)
+		fmt.Println()
+		return
+	}
+
+	fmt.Printf("%d non-passing checks grouped by root cause\n", r.TotalNonPassing)
+	for _, g := range r.Groups {
+		fmt.Printf("%s (%d checks)\n", g.Class, g.Count)
+		for _, a := range g.Actions {
+			fmt.Printf("  source: %s\n", a.Detail)
+			if len(a.Checks) > 0 {
+				fmt.Printf("    checks: %s\n", strings.Join(a.Checks, ", "))
+			}
+		}
+		if len(g.BlockedBy) > 0 {
+			fmt.Printf("  blocked by: %s\n", strings.Join(g.BlockedBy, ", "))
+		}
+		fmt.Printf("  fix once: %s\n", g.Remediation)
+	}
+	if len(r.Delta) > 0 {
+		fmt.Printf("change since baseline:")
+		first := true
+		for _, class := range check.RootCauseClasses {
+			d, ok := r.Delta[class]
+			if !ok {
+				continue
+			}
+			fmt.Printf("%s %s %+d", boolIf(!first, ","), class, d)
+			first = false
+		}
+		fmt.Println()
+	}
+	fmt.Println()
+}
+
+func boolIf(cond bool, s string) string {
+	if cond {
+		return s
+	}
+	return ""
 }
 
 func printSummary(summary check.Summary, sectionName string) {
@@ -400,6 +476,9 @@ func writeOutput(controlsCollection []*check.Controls) {
 		jid, _ := strconv.Atoi(controlsCollection[j].ID)
 		return iid < jid
 	})
+	// Root cause analysis is a single pass over every section, run immediately
+	// before output. It never changes States or Summaries.
+	applyRootCauseAnalysis(controlsCollection)
 	if junitFmt {
 		writeJunitOutput(controlsCollection)
 		return
@@ -426,6 +505,9 @@ func writeJSONOutput(controlsCollection []*check.Controls) {
 		var totals check.OverallControls
 		totals.Controls = controlsCollection
 		totals.Totals = getSummaryTotals(controlsCollection)
+		if rootCause {
+			totals.RootCause = rootCauseReport
+		}
 		out, err = json.Marshal(totals)
 	} else {
 		out, err = json.Marshal(controlsCollection)
@@ -434,6 +516,49 @@ func writeJSONOutput(controlsCollection []*check.Controls) {
 		exitWithError(fmt.Errorf("failed to output in JSON format: %v", err))
 	}
 	printOutput(string(out), outputFile)
+}
+
+// loadRootCauseBaseline reads a previous JSON run and returns its per-class
+// counts. Both the totals envelope and a plain controls array are accepted.
+func loadRootCauseBaseline(path string) (map[check.RootCauseClass]int, error) {
+	in, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read root cause baseline %s: %v", path, err)
+	}
+
+	trimmed := bytes.TrimSpace(in)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var sections []*check.Controls
+		if err := json.Unmarshal(trimmed, &sections); err != nil {
+			return nil, fmt.Errorf("failed to parse root cause baseline %s: %v", path, err)
+		}
+		counts := map[check.RootCauseClass]int{}
+		found := false
+		for _, s := range sections {
+			if s.RootCause == nil || s.RootCause.Counts == nil {
+				continue
+			}
+			found = true
+			for class, n := range s.RootCause.Counts {
+				counts[class] += n
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("baseline %s contains no root cause data; run with --json --root-cause first", path)
+		}
+		return counts, nil
+	}
+
+	var envelope struct {
+		RootCause *check.RootCauseReport `json:"RootCause"`
+	}
+	if err := json.Unmarshal(trimmed, &envelope); err != nil {
+		return nil, fmt.Errorf("failed to parse root cause baseline %s: %v", path, err)
+	}
+	if envelope.RootCause == nil || envelope.RootCause.Counts == nil {
+		return nil, fmt.Errorf("baseline %s contains no root cause data; run with --json --root-cause first", path)
+	}
+	return envelope.RootCause.Counts, nil
 }
 
 func writeJunitOutput(controlsCollection []*check.Controls) {
@@ -478,6 +603,11 @@ func writeStdoutOutput(controlsCollection []*check.Controls) {
 	for _, controls := range controlsCollection {
 		summary := controls.Summary
 		prettyPrint(controls, summary)
+	}
+	// Root cause grouping is a single cross-section view, printed once after
+	// all sections. It never changes the per-section output above.
+	if rootCause && rootCauseReport != nil {
+		printRootCause(rootCauseReport)
 	}
 	if !noTotals {
 		printSummary(getSummaryTotals(controlsCollection), "total")

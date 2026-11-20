@@ -85,6 +85,39 @@ type Check struct {
 	AuditEnvOutput    string `json:"-"`
 	AuditConfigOutput string `json:"-"`
 	DisableEnvTesting bool   `json:"-"`
+
+	// RootCause is populated only when root cause analysis is enabled. It is
+	// additive metadata: State, Summary and exit codes are unaffected.
+	RootCause *CheckRootCause `json:"root_cause,omitempty"`
+
+	// auditEvidence records raw audit command outcomes so that root causes can
+	// be classified after execution without re-running anything.
+	auditEvidence []auditEvidence
+}
+
+// auditEvidence is a raw record of one audit command execution.
+type auditEvidence struct {
+	Stage   string
+	Command string
+	Output  string
+	Err     string
+	// Suppressed is set when the run intentionally ignored the error (for
+	// example, a missing audit_config file when other audit output exists).
+	Suppressed bool
+}
+
+// recordAudit stores the raw outcome of an audit command. It deliberately does
+// not interpret the result: classification happens after all checks have run.
+func (c *Check) recordAudit(stage, command, output string, err error) {
+	e := auditEvidence{
+		Stage:   stage,
+		Command: strings.TrimSpace(command),
+		Output:  output,
+	}
+	if err != nil {
+		e.Err = err.Error()
+	}
+	c.auditEvidence = append(c.auditEvidence, e)
 }
 
 // Runner wraps the basic Run method.
@@ -196,6 +229,7 @@ func (c *Check) runAuditCommands() (lastCommand string, err error) {
 	// Always run auditEnvOutput if needed
 	if c.AuditEnv != "" {
 		c.AuditEnvOutput, err = runAudit(c.AuditEnv)
+		c.recordAudit("auditEnv", c.AuditEnv, c.AuditEnvOutput, err)
 		if err != nil {
 			return c.AuditEnv, err
 		}
@@ -203,11 +237,13 @@ func (c *Check) runAuditCommands() (lastCommand string, err error) {
 
 	// Run the audit command and auditConfig commands, if present
 	c.AuditOutput, err = runAudit(c.Audit)
+	c.recordAudit("audit", c.Audit, c.AuditOutput, err)
 	if err != nil {
 		return c.Audit, err
 	}
 
 	c.AuditConfigOutput, err = runAudit(c.AuditConfig)
+	c.recordAudit("auditConfig", c.AuditConfig, c.AuditConfigOutput, err)
 	// when file not found then error comes as exit status 127
 	// in some env same error comes as exit status 1
 	if err != nil && (strings.Contains(err.Error(), "exit status 127") ||
@@ -217,6 +253,12 @@ func (c *Check) runAuditCommands() (lastCommand string, err error) {
 		glog.V(3).Info(err)
 		err = nil
 		c.AuditConfigOutput = ""
+		// The suppressed error is still evidence that the config file could
+		// not be used, so keep the latest record consistent with the result.
+		if n := len(c.auditEvidence); n > 0 {
+			c.auditEvidence[n-1].Err = ""
+			c.auditEvidence[n-1].Suppressed = true
+		}
 	}
 	return c.AuditConfig, err
 }

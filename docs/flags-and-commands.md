@@ -25,6 +25,9 @@ Flag | Description
 --nototals | Disable calculating and printing of totals for failed, passed, ... checks across all sections 
 --outputfile | Writes the results to output file when run with --json or --junit
 --pgsql | Save the results to PostgreSQL
+--root-cause | Group non-passing checks by root cause and attach a per-check classification. States, summaries and exit codes are unchanged.
+--root-cause-baseline | Path to a previous `--json --root-cause` output used to report per-class deltas.
+--root-cause-config | Path to an out-of-band YAML file declaring check dependencies.
 --scored | Run the scored CIS checks (default true)
 --skip string | List of comma separated values of checks to be skipped
 --stderrthreshold severity | logs at or above this threshold go to stderr (default 2)
@@ -137,3 +140,66 @@ Only `--nototals` will effect the json output and thats because it will not call
 Running `kube-bench` with the `-v 3` parameter will generate debug logs that can be very helpful for debugging problems.
 
 If you are using one of the example `job*.yaml` files, you will need to edit the `command` field, for example `["kube-bench", "-v", "3"]`. Once the job has run, the logs can be retrieved using `kubectl logs` on the job's pod.
+
+#### Grouping non-passing checks by root cause
+
+When a benchmark run produces many WARN/FAIL results that share a single cause
+(for example, the container cannot read the host config files), the flat list
+is hard to act on. `--root-cause` adds a classification pass on top of the
+existing results. It does **not** change any PASS/FAIL/WARN state, the
+summaries, or the exit code.
+
+```
+kube-bench run --targets master --root-cause --json
+```
+
+Every non-passing check receives exactly one class:
+
+| Class | Meaning |
+| --- | --- |
+| `file_unreadable` | A config/manifest/host file could not be read. |
+| `command_missing` | A command the audit depends on does not exist. |
+| `permission_denied` | The audit ran but lacked privileges. |
+| `upstream_blocked` | A check this one depends on did not pass, so this one cannot be judged. |
+| `not_applicable` | The check does not apply here (skipped or manual). |
+| `unclassified` | Cause not determinable; the raw symptom is reported, never a guess. |
+
+The report lists each class once with the number of affected checks, the
+distinct points of action (`sources`), and a single remediation for the class.
+Checks that share a point of action (for example the same missing file) are
+grouped so the fix is stated once.
+
+##### Dependencies between checks
+
+Dependencies are declared in a separate file so the benchmark definitions
+(`cfg/`) are never modified:
+
+```yaml
+# root-cause.yaml
+dependencies:
+  1.1.2: [1.1.1]      # 1.1.2 cannot be judged unless 1.1.1 passes
+  1.1.3: [1.1.2]
+```
+
+```
+kube-bench run --targets master --root-cause --root-cause-config root-cause.yaml
+```
+
+If an upstream check does not pass, the downstream check is reported as
+`upstream_blocked`, not as an ordinary failure. A cycle in the graph is
+reported with the check IDs on it and the run stops before producing any
+statistics.
+
+##### Comparing runs
+
+Pass a previous `--json --root-cause` output with `--root-cause-baseline`; the
+report then includes a per-class delta. A negative delta means fewer checks
+were affected by that root cause in this run.
+
+```
+kube-bench run --targets master --root-cause --json --outputfile run1.json
+kube-bench run --targets master --root-cause --root-cause-baseline run1.json --json
+```
+
+The analysis is deterministic: the same environment produces the same
+classification and the same grouping, byte for byte.

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -40,9 +41,101 @@ const (
 	TYPE = "Software and Configuration Checks/Industry and Regulatory Standards/CIS Kubernetes Benchmark"
 )
 
+// OverallControls is the JSON envelope used when totals are enabled.
 type OverallControls struct {
 	Controls []*Controls
 	Totals   Summary
+	// RootCause is present only when root cause analysis was enabled.
+	RootCause *RootCauseReport `json:"RootCause,omitempty"`
+}
+
+// AggregateRootCauseReports merges the per-section reports for the totals
+// envelope. It is deterministic: checks are sorted and classes follow the
+// fixed RootCauseClasses order regardless of which sections ran.
+func AggregateRootCauseReports(reports []*RootCauseReport, previous map[RootCauseClass]int) *RootCauseReport {
+	merged := &RootCauseReport{Enabled: true, Counts: map[RootCauseClass]int{}}
+	type groupData struct {
+		checks    []string
+		sources   map[string][]string
+		blockedBy []string
+	}
+	data := map[RootCauseClass]*groupData{}
+
+	for _, r := range reports {
+		if r == nil {
+			continue
+		}
+		if r.Degraded {
+			return &RootCauseReport{Enabled: true, Degraded: true, Note: r.Note}
+		}
+		merged.TotalNonPassing += r.TotalNonPassing
+		for class, n := range r.Counts {
+			merged.Counts[class] += n
+		}
+		for _, g := range r.Groups {
+			d := data[g.Class]
+			if d == nil {
+				d = &groupData{sources: map[string][]string{}}
+				data[g.Class] = d
+			}
+			d.checks = append(d.checks, g.Checks...)
+			for _, a := range g.Actions {
+				d.sources[a.Detail] = append(d.sources[a.Detail], a.Checks...)
+			}
+			for _, b := range g.BlockedBy {
+				d.blockedBy = appendUnique(d.blockedBy, b)
+			}
+		}
+	}
+
+	for _, class := range RootCauseClasses {
+		d := data[class]
+		if d == nil || len(d.checks) == 0 {
+			continue
+		}
+		// The class count comes from the sections' own counts. If the listed
+		// checks disagree, the merge is inconsistent and must not be published.
+		if len(d.checks) != merged.Counts[class] {
+			return &RootCauseReport{
+				Enabled:  true,
+				Degraded: true,
+				Note:     fmt.Sprintf("root cause aggregation failed and was not applied: class %s lists %d checks but counts %d", class, len(d.checks), merged.Counts[class]),
+			}
+		}
+		g := RootCauseGroup{
+			Class:       class,
+			Signature:   signature(class),
+			Count:       merged.Counts[class],
+			Remediation: ClassRemediations[class],
+		}
+		g.Checks = append(g.Checks, d.checks...)
+		sort.Strings(g.Checks)
+		for detail, ids := range d.sources {
+			sorted := append([]string(nil), ids...)
+			sort.Strings(sorted)
+			g.Sources = append(g.Sources, detail)
+			g.Actions = append(g.Actions, RootCauseAction{Detail: detail, Checks: sorted})
+		}
+		sort.Strings(g.Sources)
+		sort.Slice(g.Actions, func(i, j int) bool { return g.Actions[i].Detail < g.Actions[j].Detail })
+		if len(d.blockedBy) > 0 {
+			g.BlockedBy = append([]string(nil), d.blockedBy...)
+			sort.Strings(g.BlockedBy)
+		}
+		merged.Groups = append(merged.Groups, g)
+	}
+
+	if previous != nil {
+		delta := map[RootCauseClass]int{}
+		for _, class := range RootCauseClasses {
+			d := merged.Counts[class] - previous[class]
+			if d != 0 || previous[class] != 0 || merged.Counts[class] != 0 {
+				delta[class] = d
+			}
+		}
+		merged.Delta = delta
+	}
+	return merged
 }
 
 // Controls holds all controls to check for master nodes.
@@ -54,6 +147,8 @@ type Controls struct {
 	Type            NodeType `json:"node_type"`
 	Groups          []*Group `json:"tests"`
 	Summary
+	// RootCause is present only when root cause analysis was enabled.
+	RootCause *RootCauseReport `json:"root_cause,omitempty"`
 }
 
 // Group is a collection of similar checks.
@@ -97,8 +192,55 @@ func NewControls(t NodeType, in []byte, detectedVersion string) (*Controls, erro
 
 // RunChecks runs the checks with the given Runner. Only checks for which the filter Predicate returns `true` will run.
 func (controls *Controls) RunChecks(runner Runner, filter Predicate, skipIDMap map[string]bool) Summary {
+	summary, _ := controls.runChecks(runner, filter, skipIDMap)
+	return summary
+}
+
+// AnalyzeControls classifies every check in every section once, as a single
+// set. It then attaches one report per section and returns the merged report
+// used for totals. States and summaries are never modified.
+//
+// The cycle check happens before any classification, so a bad graph produces
+// no partial statistics.
+func AnalyzeControls(controlsCollection []*Controls, cfg *RootCauseConfig, baseline map[RootCauseClass]int) (*RootCauseReport, error) {
+	var all []*Check
+	for _, controls := range controlsCollection {
+		for _, g := range controls.Groups {
+			all = append(all, g.Checks...)
+		}
+	}
+
+	if _, err := AnalyzeRootCauses(all, cfg, nil); err != nil {
+		// Fail closed: do not leave annotations from a failed attempt behind.
+		for _, c := range all {
+			c.RootCause = nil
+		}
+		for _, controls := range controlsCollection {
+			controls.RootCause = nil
+		}
+		return nil, err
+	}
+
+	reports := make([]*RootCauseReport, 0, len(controlsCollection))
+	for _, controls := range controlsCollection {
+		var section []*Check
+		for _, g := range controls.Groups {
+			section = append(section, g.Checks...)
+		}
+		r := SectionReport(section)
+		controls.RootCause = r
+		reports = append(reports, r)
+	}
+
+	return AggregateRootCauseReports(reports, baseline), nil
+}
+
+// runChecks executes filtered checks in their original order and returns both
+// the summary and the checks that actually ran, preserving that order.
+func (controls *Controls) runChecks(runner Runner, filter Predicate, skipIDMap map[string]bool) (Summary, []*Check) {
 	var g []*Group
 	m := make(map[string]*Group)
+	executed := []*Check{}
 	controls.Summary.Pass, controls.Summary.Fail, controls.Summary.Warn, controls.Info = 0, 0, 0, 0
 
 	for _, group := range controls.Groups {
@@ -116,6 +258,7 @@ func (controls *Controls) RunChecks(runner Runner, filter Predicate, skipIDMap m
 			}
 
 			state := runner.Run(check)
+			executed = append(executed, check)
 
 			check.TestInfo = append(check.TestInfo, check.Remediation)
 
@@ -145,7 +288,7 @@ func (controls *Controls) RunChecks(runner Runner, filter Predicate, skipIDMap m
 	}
 
 	controls.Groups = g
-	return controls.Summary
+	return controls.Summary, executed
 }
 
 // JSON encodes the results of last run to JSON.

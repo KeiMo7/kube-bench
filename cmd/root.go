@@ -61,6 +61,12 @@ var (
 	outputFile           string
 	configFileError      error
 	controlsCollection   []*check.Controls
+
+	rootCause             bool
+	rootCauseConfig       string
+	rootCauseBaselinePath string
+	rootCauseBaseline     map[check.RootCauseClass]int
+	rootCauseReport       *check.RootCauseReport
 )
 
 // RootCmd represents the base command when called without any subcommands
@@ -173,6 +179,12 @@ func init() {
 	RootCmd.PersistentFlags().StringVar(&skipIds, "skip", "", "List of comma separated values of checks to be skipped")
 	RootCmd.PersistentFlags().BoolVar(&includeTestOutput, "include-test-output", false, "Prints the actual result when test fails")
 	RootCmd.PersistentFlags().StringVar(&outputFile, "outputfile", "", "Writes the results to output file when run with --json or --junit")
+	RootCmd.PersistentFlags().BoolVar(&rootCause, "root-cause", false,
+		"Group non-passing checks by root cause and attach a per-check classification. Results and exit codes are unchanged.")
+	RootCmd.PersistentFlags().StringVar(&rootCauseConfig, "root-cause-config", "",
+		"Path to an out-of-band YAML file declaring check dependencies (dependencies: {check: [upstream...]}). Used with --root-cause.")
+	RootCmd.PersistentFlags().StringVar(&rootCauseBaselinePath, "root-cause-baseline", "",
+		"Path to a previous --json --root-cause output. When used with --root-cause, per-class counts are compared and a delta is reported.")
 
 	RootCmd.PersistentFlags().StringVarP(
 		&filterOpts.CheckList,
