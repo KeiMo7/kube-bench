@@ -85,6 +85,11 @@ type Check struct {
 	AuditEnvOutput    string `json:"-"`
 	AuditConfigOutput string `json:"-"`
 	DisableEnvTesting bool   `json:"-"`
+	// RuleFingerprint is attached additively when the check runs. It records
+	// the rule identity (check ID, decision condition, rule set version) that
+	// the result was produced under, so two scans can be compared without
+	// consulting anything outside the reports.
+	RuleFingerprint *RuleFingerprint `json:"rule_fingerprint,omitempty"`
 }
 
 // Runner wraps the basic Run method.

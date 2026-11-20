@@ -111,6 +111,10 @@ func runChecks(nodetype check.NodeType, testYamlFile, detectedVersion string) {
 		exitWithError(fmt.Errorf("error setting up %s controls: %v", nodetype, err))
 	}
 
+	// Attach additive rule set metadata (version, product line, selection
+	// mode and any version-mapping fallback) so the report is self-describing.
+	controls.RuleSet = buildRuleSetInfo(controls.Version)
+
 	runner := check.NewRunner()
 	filter, err := NewRunFilter(filterOpts)
 	if err != nil {
@@ -280,6 +284,7 @@ func mapToBenchmarkVersion(kubeToBenchmarkMap map[string]string, kv string) (str
 	kvOriginal := kv
 	cisVersion, found := kubeToBenchmarkMap[kv]
 	glog.V(2).Info(fmt.Sprintf("mapToBenchmarkVersion for k8sVersion: %q cisVersion: %q found: %t\n", kv, cisVersion, found))
+	exactMatch := found
 	for !found && (kv != defaultKubeVersion && !isEmpty(kv)) {
 		kv = decrementVersion(kv)
 		cisVersion, found = kubeToBenchmarkMap[kv]
@@ -291,6 +296,14 @@ func mapToBenchmarkVersion(kubeToBenchmarkMap map[string]string, kv string) (str
 		glog.V(3).Info(fmt.Sprintf("mapToBenchmarkVersion kubeToBenchmarkMap: %#v", kubeToBenchmarkMap))
 		return "", fmt.Errorf("unable to find a matching Benchmark Version match for kubernetes version: %s", kvOriginal)
 	}
+
+	// Record the mapping decision (including fallback) without changing the
+	// returned version or any other external behaviour.
+	recordVersionMappingSelection(kvOriginal, fallbackTrace{
+		used:        !exactMatch,
+		fromVersion: kvOriginal,
+		toVersion:   cisVersion,
+	})
 
 	return cisVersion, nil
 }
@@ -315,6 +328,7 @@ func loadTargetMapping(v *viper.Viper) (map[string][]string, error) {
 
 func getBenchmarkVersion(kubeVersion, benchmarkVersion string, platform Platform, v *viper.Viper) (bv string, err error) {
 	detecetedKubeVersion = "none"
+	resetRuleSetSelection()
 	if !isEmpty(kubeVersion) && !isEmpty(benchmarkVersion) {
 		return "", fmt.Errorf("It is an error to specify both --version and --benchmark flags")
 	}
@@ -322,6 +336,7 @@ func getBenchmarkVersion(kubeVersion, benchmarkVersion string, platform Platform
 		benchmarkVersion = getPlatformBenchmarkVersion(platform)
 		if !isEmpty(benchmarkVersion) {
 			detecetedKubeVersion = benchmarkVersion
+			recordPlatformSelection(benchmarkVersion)
 		}
 	}
 
@@ -346,6 +361,10 @@ func getBenchmarkVersion(kubeVersion, benchmarkVersion string, platform Platform
 		}
 
 		glog.V(2).Info(fmt.Sprintf("Mapped Kubernetes version: %s to Benchmark version: %s", kubeVersion, benchmarkVersion))
+	} else if ruleSetSelectionMode == "" {
+		// A benchmark version was supplied directly (--benchmark or
+		// KUBE_BENCH_BENCHMARK); record it as a manual selection.
+		recordManualSelection(benchmarkVersion)
 	}
 
 	glog.V(1).Info(fmt.Sprintf("Kubernetes version: %q to Benchmark version: %q", kubeVersion, benchmarkVersion))
@@ -426,6 +445,7 @@ func writeJSONOutput(controlsCollection []*check.Controls) {
 		var totals check.OverallControls
 		totals.Controls = controlsCollection
 		totals.Totals = getSummaryTotals(controlsCollection)
+		totals.SchemaVersion = check.ReportSchemaVersion
 		out, err = json.Marshal(totals)
 	} else {
 		out, err = json.Marshal(controlsCollection)

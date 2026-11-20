@@ -43,6 +43,38 @@ const (
 type OverallControls struct {
 	Controls []*Controls
 	Totals   Summary
+	// SchemaVersion identifies the report structure. It is additive: older
+	// consumers that only read Controls and Totals are unaffected.
+	SchemaVersion string `json:"schema_version,omitempty"`
+}
+
+// RuleSetInfo records which rule set produced a section of the report and how
+// it was selected, so the report is self-describing for later comparison.
+// Nothing here is inferred from external documentation; every field is
+// populated from the run's own inputs and version-mapping decisions.
+type RuleSetInfo struct {
+	// Version is the rule set version actually used, e.g. "k3s-cis-1.10".
+	Version string `json:"version"`
+	// ProductLine is the benchmark product line derived from the rule set
+	// version, e.g. "k3s" for "k3s-cis-1.10" or "eks" for "eks-1.8.0".
+	ProductLine string `json:"product_line"`
+	// SelectionMode records how the rule set was chosen:
+	// "manual" (--benchmark), "platform" (detected managed platform), or
+	// "version-mapping" (detected Kubernetes version mapped to a benchmark).
+	SelectionMode string `json:"selection_mode,omitempty"`
+	// RequestedVersion is the input that drove selection: the --benchmark
+	// value, platform version or detected Kubernetes version respectively.
+	RequestedVersion string `json:"requested_version,omitempty"`
+	// DetectedVersion is the Kubernetes/platform version detected on the node
+	// when selection was not manual.
+	DetectedVersion string `json:"detected_version,omitempty"`
+	// FallbackUsed is true when an exact rule set match could not be found
+	// and version mapping fell back to an older rule set version.
+	FallbackUsed bool `json:"fallback_used,omitempty"`
+	// FallbackFromVersion and FallbackToVersion record the mapping fallback
+	// trail (requested input version -> rule set version actually used).
+	FallbackFromVersion string `json:"fallback_from_version,omitempty"`
+	FallbackToVersion   string `json:"fallback_to_version,omitempty"`
 }
 
 // Controls holds all controls to check for master nodes.
@@ -54,6 +86,9 @@ type Controls struct {
 	Type            NodeType `json:"node_type"`
 	Groups          []*Group `json:"tests"`
 	Summary
+	// RuleSet is the additive self-description of the rule set used for this
+	// section of the report.
+	RuleSet *RuleSetInfo `json:"rule_set,omitempty"`
 }
 
 // Group is a collection of similar checks.
@@ -114,6 +149,11 @@ func (controls *Controls) RunChecks(runner Runner, filter Predicate, skipIDMap m
 			if group.Type == SKIP || groupSkippedViaCmd || checkSkippedViaCmd {
 				check.Type = SKIP
 			}
+
+			// Attach the rule fingerprint before running so the reported
+			// identity (check ID, decision condition, rule set version)
+			// reflects exactly the rule that is about to be evaluated.
+			check.RuleFingerprint = check.ComputeFingerprint(controls.Version)
 
 			state := runner.Run(check)
 

@@ -15,6 +15,7 @@ nav:
       - How to run: running.md
       - ASFF: asff.md
   - Flags: flags-and-commands.md
+  - Comparing scan reports: comparing-reports.md
   - Configuration Options:
       - Understanding the yamls: controls.md
       - Architecture: architecture.md
