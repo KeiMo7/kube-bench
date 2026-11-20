@@ -110,6 +110,11 @@ func runChecks(nodetype check.NodeType, testYamlFile, detectedVersion string) {
 	if err != nil {
 		exitWithError(fmt.Errorf("error setting up %s controls: %v", nodetype, err))
 	}
+	controls.SetBaselineVersion(activeBenchmarkVersion)
+	controls.NodeName = viper.GetString("NODE_NAME")
+	if controls.NodeName == "" {
+		controls.NodeName, _ = os.Hostname()
+	}
 
 	runner := check.NewRunner()
 	filter, err := NewRunFilter(filterOpts)
@@ -119,7 +124,10 @@ func runChecks(nodetype check.NodeType, testYamlFile, detectedVersion string) {
 
 	generateDefaultEnvAudit(controls, binSubs)
 
-	controls.RunChecks(runner, filter, parseSkipIds(skipIds))
+	controls.RunChecksWithOptions(runner, filter, parseSkipIds(skipIds), check.RunOptions{
+		DependencyChecking: dependencyChecks,
+		Timeout:            checkTimeout,
+	})
 	controlsCollection = append(controlsCollection, controls)
 }
 
@@ -167,11 +175,23 @@ func colorPrint(state check.State, s string) {
 func prettyPrint(r *check.Controls, summary check.Summary) {
 	// Print check results.
 	if !noResults {
+		if r.BaselineVersion != "" || r.CheckVersion != "" {
+			colorPrint(check.INFO, fmt.Sprintf("Baseline version: %s, check version: %s\n", r.BaselineVersion, r.CheckVersion))
+			if r.VersionMismatch {
+				colorPrint(check.WARN, "不可跨版本比对: benchmark and check versions do not match\n")
+			}
+		}
 		colorPrint(check.INFO, fmt.Sprintf("%s %s\n", r.ID, r.Text))
 		for _, g := range r.Groups {
 			colorPrint(check.INFO, fmt.Sprintf("%s %s\n", g.ID, g.Text))
 			for _, c := range g.Checks {
 				colorPrint(c.State, fmt.Sprintf("%s %s\n", c.ID, c.Text))
+				if c.State == check.NOT_EXECUTED && c.ReasonCategory != "" {
+					fmt.Printf("\t reason category: %s (%s)\n", c.ReasonCategory, c.Reason)
+				}
+				if c.VersionMismatch {
+					fmt.Printf("\t test version: %s, baseline version: %s\n", c.Version, c.BaselineVersion)
+				}
 
 				if includeTestOutput && c.State == check.FAIL && len(c.ActualValue) > 0 {
 					printRawOutput(c.ActualValue)
@@ -215,7 +235,7 @@ func printSummary(summary check.Summary, sectionName string) {
 	var res check.State
 	if summary.Fail > 0 {
 		res = check.FAIL
-	} else if summary.Warn > 0 {
+	} else if summary.Warn > 0 || summary.NotExecuted > 0 {
 		res = check.WARN
 	} else {
 		res = check.PASS
@@ -225,6 +245,19 @@ func printSummary(summary check.Summary, sectionName string) {
 	fmt.Printf("%d checks PASS\n%d checks FAIL\n%d checks WARN\n%d checks INFO\n\n",
 		summary.Pass, summary.Fail, summary.Warn, summary.Info,
 	)
+	if dependencyChecks || summary.Skip > 0 || summary.NotApplicable > 0 || summary.NotExecuted > 0 {
+		fmt.Printf("%d checks SKIP\n%d checks NOT_APPLICABLE\n%d checks NOT_EXECUTED\n\n",
+			summary.Skip, summary.NotApplicable, summary.NotExecuted,
+		)
+	}
+	if len(summary.NotExecutedReasons) > 0 {
+		reasons := make([]string, 0, len(summary.NotExecutedReasons))
+		for reason, count := range summary.NotExecutedReasons {
+			reasons = append(reasons, fmt.Sprintf("%s=%d", reason, count))
+		}
+		sort.Strings(reasons)
+		fmt.Printf("NOT_EXECUTED reasons: %s\n\n", strings.Join(reasons, ", "))
+	}
 }
 
 // loadConfig finds the correct config dir based on the kubernetes version,
@@ -426,6 +459,7 @@ func writeJSONOutput(controlsCollection []*check.Controls) {
 		var totals check.OverallControls
 		totals.Controls = controlsCollection
 		totals.Totals = getSummaryTotals(controlsCollection)
+		totals.Distributions = check.BuildDistributions(controlsCollection)
 		out, err = json.Marshal(totals)
 	} else {
 		out, err = json.Marshal(controlsCollection)
@@ -480,6 +514,7 @@ func writeStdoutOutput(controlsCollection []*check.Controls) {
 		prettyPrint(controls, summary)
 	}
 	if !noTotals {
+		printDistributions(check.BuildDistributions(controlsCollection))
 		printSummary(getSummaryTotals(controlsCollection), "total")
 	}
 }
@@ -488,12 +523,40 @@ func getSummaryTotals(controlsCollection []*check.Controls) check.Summary {
 	var totalSummary check.Summary
 	for _, controls := range controlsCollection {
 		summary := controls.Summary
+		totalSummary.DependencyMode = totalSummary.DependencyMode || summary.DependencyMode
 		totalSummary.Fail = totalSummary.Fail + summary.Fail
 		totalSummary.Warn = totalSummary.Warn + summary.Warn
 		totalSummary.Pass = totalSummary.Pass + summary.Pass
 		totalSummary.Info = totalSummary.Info + summary.Info
+		totalSummary.Skip = totalSummary.Skip + summary.Skip
+		totalSummary.NotApplicable = totalSummary.NotApplicable + summary.NotApplicable
+		totalSummary.NotExecuted = totalSummary.NotExecuted + summary.NotExecuted
+		if len(summary.NotExecutedReasons) > 0 {
+			if totalSummary.NotExecutedReasons == nil {
+				totalSummary.NotExecutedReasons = make(map[string]int)
+			}
+			for reason, count := range summary.NotExecutedReasons {
+				totalSummary.NotExecutedReasons[reason] += count
+			}
+		}
 	}
 	return totalSummary
+}
+
+func printDistributions(distributions []check.CheckDistribution) {
+	if len(distributions) == 0 {
+		return
+	}
+	colors[check.WARN].Printf("== Check result distributions ==\n")
+	for _, distribution := range distributions {
+		states := make([]string, 0, len(distribution.States))
+		for state, count := range distribution.States {
+			states = append(states, fmt.Sprintf("%s=%d", state, count))
+		}
+		sort.Strings(states)
+		fmt.Printf("%s (%d results): %s\n", distribution.CheckID, distribution.Total, strings.Join(states, ", "))
+	}
+	fmt.Println()
 }
 
 func printRawOutput(output string) {

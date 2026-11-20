@@ -36,6 +36,7 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			exitWithError(fmt.Errorf("unable to get benchmark version. error: %v", err))
 		}
+		activeBenchmarkVersion = bv
 
 		glog.V(2).Infof("Checking targets %v for %v", targets, bv)
 		benchmarkVersionToTargetsMap, err := loadTargetMapping(viper.GetViper())

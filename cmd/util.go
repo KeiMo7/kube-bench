@@ -24,10 +24,13 @@ import (
 
 // Print colors
 var colors = map[check.State]*color.Color{
-	check.PASS: color.New(color.FgGreen),
-	check.FAIL: color.New(color.FgRed),
-	check.WARN: color.New(color.FgYellow),
-	check.INFO: color.New(color.FgBlue),
+	check.PASS:           color.New(color.FgGreen),
+	check.FAIL:           color.New(color.FgRed),
+	check.WARN:           color.New(color.FgYellow),
+	check.INFO:           color.New(color.FgBlue),
+	check.SKIPPED:        color.New(color.FgBlue),
+	check.NOT_APPLICABLE: color.New(color.FgBlue),
+	check.NOT_EXECUTED:   color.New(color.FgYellow),
 }
 
 var (

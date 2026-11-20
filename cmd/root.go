@@ -18,6 +18,7 @@ import (
 	goflag "flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/aquasecurity/kube-bench/check"
 	"github.com/golang/glog"
@@ -33,34 +34,37 @@ type FilterOpts struct {
 }
 
 var (
-	envVarsPrefix        = "KUBE_BENCH"
-	defaultKubeVersion   = "1.18"
-	kubeVersion          string
-	detecetedKubeVersion string
-	benchmarkVersion     string
-	cfgFile              string
-	cfgDir               = "./cfg/"
-	jsonFmt              bool
-	junitFmt             bool
-	pgSQL                bool
-	aSFF                 bool
-	masterFile           = "master.yaml"
-	nodeFile             = "node.yaml"
-	etcdFile             = "etcd.yaml"
-	controlplaneFile     = "controlplane.yaml"
-	policiesFile         = "policies.yaml"
-	managedservicesFile  = "managedservices.yaml"
-	exitCode             int
-	noResults            bool
-	noSummary            bool
-	noRemediations       bool
-	skipIds              string
-	noTotals             bool
-	filterOpts           FilterOpts
-	includeTestOutput    bool
-	outputFile           string
-	configFileError      error
-	controlsCollection   []*check.Controls
+	envVarsPrefix          = "KUBE_BENCH"
+	defaultKubeVersion     = "1.18"
+	kubeVersion            string
+	detecetedKubeVersion   string
+	benchmarkVersion       string
+	cfgFile                string
+	cfgDir                 = "./cfg/"
+	jsonFmt                bool
+	junitFmt               bool
+	pgSQL                  bool
+	aSFF                   bool
+	masterFile             = "master.yaml"
+	nodeFile               = "node.yaml"
+	etcdFile               = "etcd.yaml"
+	controlplaneFile       = "controlplane.yaml"
+	policiesFile           = "policies.yaml"
+	managedservicesFile    = "managedservices.yaml"
+	exitCode               int
+	noResults              bool
+	noSummary              bool
+	noRemediations         bool
+	skipIds                string
+	noTotals               bool
+	filterOpts             FilterOpts
+	includeTestOutput      bool
+	outputFile             string
+	configFileError        error
+	controlsCollection     []*check.Controls
+	dependencyChecks       bool
+	checkTimeout           time.Duration
+	activeBenchmarkVersion string
 )
 
 // RootCmd represents the base command when called without any subcommands
@@ -73,6 +77,7 @@ var RootCmd = &cobra.Command{
 		if err != nil {
 			exitWithError(fmt.Errorf("unable to determine benchmark version: %v", err))
 		}
+		activeBenchmarkVersion = bv
 		glog.V(1).Infof("Running checks for benchmark %v", bv)
 
 		if isMaster() {
@@ -173,6 +178,9 @@ func init() {
 	RootCmd.PersistentFlags().StringVar(&skipIds, "skip", "", "List of comma separated values of checks to be skipped")
 	RootCmd.PersistentFlags().BoolVar(&includeTestOutput, "include-test-output", false, "Prints the actual result when test fails")
 	RootCmd.PersistentFlags().StringVar(&outputFile, "outputfile", "", "Writes the results to output file when run with --json or --junit")
+	RootCmd.PersistentFlags().BoolVar(&dependencyChecks, "enable-dependencies", false, "Enable explicit check dependency gating and four-state reporting")
+	RootCmd.PersistentFlags().BoolVar(&dependencyChecks, "check-dependencies", false, "Alias for --enable-dependencies")
+	RootCmd.PersistentFlags().DurationVar(&checkTimeout, "check-timeout", 0, "Default timeout for each check; timed out checks are NOT_EXECUTED")
 
 	RootCmd.PersistentFlags().StringVarP(
 		&filterOpts.CheckList,
