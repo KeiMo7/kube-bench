@@ -16,9 +16,11 @@ package check
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/golang/glog"
 )
@@ -38,6 +40,11 @@ const (
 	WARN State = "WARN"
 	// INFO informational message
 	INFO State = "INFO"
+	// UNKNOWN the check could not be evaluated: the audit command could not
+	// be executed, produced no usable output, or its output could not be
+	// parsed. UNKNOWN is not a pass and not a fail; it is excluded from
+	// compliance-rate numerator and denominator but always reported.
+	UNKNOWN State = "UNKNOWN"
 
 	// SKIP for when a check should be skipped.
 	SKIP = "skip"
@@ -65,26 +72,43 @@ const (
 // Check contains information about a recommendation in the
 // CIS Kubernetes document.
 type Check struct {
-	ID                string   `yaml:"id" json:"test_number"`
-	Text              string   `json:"test_desc"`
-	Audit             string   `json:"audit"`
-	AuditEnv          string   `yaml:"audit_env"`
-	AuditConfig       string   `yaml:"audit_config"`
-	Type              string   `json:"type"`
-	Tests             *tests   `json:"-"`
-	Set               bool     `json:"-"`
-	Remediation       string   `json:"remediation"`
-	TestInfo          []string `json:"test_info"`
-	State             `json:"status"`
-	ActualValue       string `json:"actual_value"`
-	Scored            bool   `json:"scored"`
-	IsMultiple        bool   `yaml:"use_multiple_values"`
-	ExpectedResult    string `json:"expected_result"`
-	Reason            string `json:"reason,omitempty"`
+	ID             string   `yaml:"id" json:"test_number"`
+	Text           string   `json:"test_desc"`
+	Audit          string   `json:"audit"`
+	AuditEnv       string   `yaml:"audit_env"`
+	AuditConfig    string   `yaml:"audit_config"`
+	Type           string   `json:"type"`
+	Tests          *tests   `json:"-"`
+	Set            bool     `json:"-"`
+	Remediation    string   `json:"remediation"`
+	TestInfo       []string `json:"test_info"`
+	State          `json:"status"`
+	ActualValue    string `json:"actual_value"`
+	Scored         bool   `json:"scored"`
+	IsMultiple     bool   `yaml:"use_multiple_values"`
+	ExpectedResult string `json:"expected_result"`
+	Reason         string `json:"reason,omitempty"`
+	// Evidence links the conclusion back to what was executed and observed.
+	Evidence *Evidence `json:"evidence,omitempty"`
+	// PreviousState/PreviousReason record the conclusion this check
+	// replaced, when a re-run or a manual review changed the outcome.
+	PreviousState     State  `json:"previous_state,omitempty"`
+	PreviousReason    string `json:"previous_reason,omitempty"`
 	AuditOutput       string `json:"-"`
 	AuditEnvOutput    string `json:"-"`
 	AuditConfigOutput string `json:"-"`
 	DisableEnvTesting bool   `json:"-"`
+}
+
+// Override records a manual review decision, preserving the original
+// conclusion and its reason so the change stays auditable.
+func (c *Check) Override(state State, reason string) {
+	if c.State != "" && c.State != state {
+		c.PreviousState = c.State
+		c.PreviousReason = c.Reason
+	}
+	c.State = state
+	c.Reason = reason
 }
 
 // Runner wraps the basic Run method.
@@ -108,6 +132,25 @@ func (r *defaultRunner) Run(c *Check) State {
 // the results.
 func (c *Check) run() State {
 	glog.V(3).Infof("-----   Running check %v   -----", c.ID)
+
+	// If this check already carried a conclusion (re-run), keep the last
+	// conclusion and note the previous one.
+	prevState, prevReason := c.State, c.Reason
+	ranAudit := false
+	defer func() {
+		if ranAudit {
+			c.Evidence = c.buildEvidence()
+		} else {
+			// No audit command was executed on this path (manual, skip,
+			// missing tests): the reason alone is the evidence.
+			c.Evidence = &Evidence{Reason: sanitizeEvidence(c.Reason)}
+		}
+		if prevState != "" && prevState != c.State {
+			c.PreviousState = prevState
+			c.PreviousReason = prevReason
+		}
+	}()
+
 	// Since this is an Scored check
 	// without tests return a 'WARN' to alert
 	// the user that this check needs attention
@@ -150,12 +193,32 @@ func (c *Check) run() State {
 	var finalOutput *testOutput
 	var lastCommand string
 
+	ranAudit = true
 	lastCommand, err := c.runAuditCommands()
+	if err == nil && c.noUsableEvidence() {
+		// The commands ran but produced nothing to evaluate, and no test
+		// item treats absence itself as the signal: this is "not evaluated",
+		// neither a pass nor a fail.
+		err = fmt.Errorf("audit commands produced no output to evaluate")
+	}
 	if err == nil {
 		finalOutput, err = c.execute()
 	}
 
-	if finalOutput != nil {
+	switch {
+	case err != nil:
+		// The audit command could not be executed (permission denied, path
+		// missing, timeout, ...) or the tests could not be evaluated.
+		c.Reason = sanitizeEvidence(err.Error())
+		c.State = UNKNOWN
+		glog.V(3).Info(c.Reason)
+	case finalOutput != nil && finalOutput.unknown:
+		// At least one sub-check could not be evaluated, so the check as a
+		// whole cannot be called a pass.
+		c.Reason = sanitizeEvidence(finalOutput.unknownReason)
+		c.State = UNKNOWN
+		glog.V(3).Info(c.Reason)
+	case finalOutput != nil:
 		if finalOutput.testResult {
 			c.State = PASS
 		} else {
@@ -170,16 +233,6 @@ func (c *Check) run() State {
 		c.ExpectedResult = finalOutput.ExpectedResult
 	}
 
-	if err != nil {
-		c.Reason = err.Error()
-		if c.Scored {
-			c.State = FAIL
-		} else {
-			c.State = WARN
-		}
-		glog.V(3).Info(c.Reason)
-	}
-
 	if finalOutput != nil {
 		glog.V(3).Infof("Command: %q TestResult: %t State: %q \n", lastCommand, finalOutput.testResult, c.State)
 	} else {
@@ -190,6 +243,26 @@ func (c *Check) run() State {
 		glog.V(2).Info(c.Reason)
 	}
 	return c.State
+}
+
+// noUsableEvidence reports whether every configured audit command produced
+// no output at all while no test item treats "flag absent" as a meaningful
+// signal (set: false). In that situation there is no evidence to judge the
+// check by, so it cannot be called a pass or a fail.
+func (c *Check) noUsableEvidence() bool {
+	if c.Tests == nil {
+		return false
+	}
+	for _, ti := range c.Tests.TestItems {
+		if !ti.Set {
+			return false
+		}
+	}
+	return isBlank(c.AuditOutput) && isBlank(c.AuditConfigOutput) && isBlank(c.AuditEnvOutput)
+}
+
+func isBlank(s string) bool {
+	return strings.TrimSpace(s) == ""
 }
 
 func (c *Check) runAuditCommands() (lastCommand string, err error) {
@@ -229,6 +302,7 @@ func (c *Check) execute() (finalOutput *testOutput, err error) {
 	expectedResultArr := make([]string, len(res))
 
 	glog.V(3).Infof("Running %d test_items", len(ts.TestItems))
+	var unknownReasons []string
 	for i, t := range ts.TestItems {
 
 		t.isMultipleOutput = c.IsMultiple
@@ -254,6 +328,9 @@ func (c *Check) execute() (finalOutput *testOutput, err error) {
 		}
 		glog.V(2).Infof("Used %s", t.auditUsed)
 		res[i] = result
+		if result.unknown {
+			unknownReasons = append(unknownReasons, fmt.Sprintf("test_item %d (%s): %s", i, t.value(), result.unknownReason))
+		}
 		expectedResultArr[i] = res[i].ExpectedResult
 	}
 
@@ -283,10 +360,18 @@ func (c *Check) execute() (finalOutput *testOutput, err error) {
 
 	finalOutput.testResult = result
 	finalOutput.actualResult = res[0].actualResult
+	if len(unknownReasons) > 0 {
+		finalOutput.unknown = true
+		finalOutput.unknownReason = strings.Join(unknownReasons, "; ")
+	}
 
 	glog.V(3).Infof("Returning from execute on tests: finalOutput %#v", finalOutput)
 	return finalOutput, nil
 }
+
+// auditTimeout bounds how long a single audit command may run before it is
+// treated as unable to execute. It is a variable so tests can shorten it.
+var auditTimeout = 30 * time.Second
 
 func runAudit(audit string) (output string, err error) {
 	var out bytes.Buffer
@@ -296,15 +381,24 @@ func runAudit(audit string) (output string, err error) {
 		return output, err
 	}
 
-	cmd := exec.Command("/bin/sh")
+	ctx, cancel := context.WithTimeout(context.Background(), auditTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "/bin/sh")
+	// Bound how long Wait blocks after a timeout kill, in case the audit
+	// spawned children that inherited the output pipes.
+	cmd.WaitDelay = time.Second
 	cmd.Stdin = strings.NewReader(audit)
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err = cmd.Run()
 	output = out.String()
 
+	if ctx.Err() == context.DeadlineExceeded {
+		return output, fmt.Errorf("audit command timed out after %s: %q, output: %q", auditTimeout, audit, truncateReasonOutput(output))
+	}
 	if err != nil {
-		err = fmt.Errorf("failed to run: %q, output: %q, error: %s", audit, output, err)
+		err = fmt.Errorf("failed to run: %q, output: %q, error: %s", audit, truncateReasonOutput(output), err)
 	} else {
 		glog.V(3).Infof("Command: %q", audit)
 		glog.V(3).Infof("Output:\n %q", output)

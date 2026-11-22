@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -84,10 +83,11 @@ type testOutput struct {
 	flagFound      bool
 	actualResult   string
 	ExpectedResult string
-}
-
-func failTestItem(s string) *testOutput {
-	return &testOutput{testResult: false, actualResult: s}
+	// unknown marks a sub-check that could not be evaluated (for example
+	// because the audit output could not be parsed). Any unknown sub-check
+	// makes the whole check UNKNOWN.
+	unknown       bool
+	unknownReason string
 }
 
 func (t testItem) value() string {
@@ -160,7 +160,7 @@ func (t pathTestItem) findValue(s string) (match bool, value string, err error) 
 
 	err = unmarshal(s, &jsonInterface)
 	if err != nil {
-		return false, "", fmt.Errorf("failed to load YAML or JSON from input \"%s\": %v", s, err)
+		return false, "", fmt.Errorf("failed to load YAML or JSON from input \"%s\": %v", truncateReasonOutput(s), err)
 	}
 
 	value, err = executeJSONPath(t.Path, &jsonInterface)
@@ -221,8 +221,10 @@ func (t testItem) evaluate(s string) *testOutput {
 
 	match, value, err := t.findValue(s)
 	if err != nil {
-		fmt.Fprint(os.Stderr, err.Error())
-		return failTestItem(err.Error())
+		// The output could not be parsed: this sub-check cannot be
+		// evaluated, so it must not count as a pass or a fail.
+		glog.V(1).Infof("unable to evaluate test item: %v", err)
+		return &testOutput{testResult: false, unknown: true, unknownReason: err.Error()}
 	}
 
 	if t.Set {

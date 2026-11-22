@@ -184,7 +184,7 @@ func prettyPrint(r *check.Controls, summary check.Summary) {
 
 	// Print remediations.
 	if !noRemediations {
-		if summary.Fail > 0 || summary.Warn > 0 {
+		if summary.Fail > 0 || summary.Warn > 0 || summary.Unknown > 0 {
 			colors[check.WARN].Printf("== Remediations %s ==\n", r.Type)
 			for _, g := range r.Groups {
 				for _, c := range g.Checks {
@@ -198,6 +198,15 @@ func prettyPrint(r *check.Controls, summary check.Summary) {
 						} else {
 							fmt.Printf("%s %s\n", c.ID, c.Remediation)
 						}
+					}
+					if c.State == check.UNKNOWN {
+						// The check could not be evaluated; explain why
+						// instead of printing a remediation.
+						reason := c.Reason
+						if reason == "" {
+							reason = "no reason recorded"
+						}
+						fmt.Printf("%s check could not be evaluated: %s\n", c.ID, reason)
 					}
 				}
 			}
@@ -217,13 +226,15 @@ func printSummary(summary check.Summary, sectionName string) {
 		res = check.FAIL
 	} else if summary.Warn > 0 {
 		res = check.WARN
+	} else if summary.Unknown > 0 {
+		res = check.UNKNOWN
 	} else {
 		res = check.PASS
 	}
 
 	colors[res].Printf("== Summary %s ==\n", sectionName)
-	fmt.Printf("%d checks PASS\n%d checks FAIL\n%d checks WARN\n%d checks INFO\n\n",
-		summary.Pass, summary.Fail, summary.Warn, summary.Info,
+	fmt.Printf("%d checks PASS\n%d checks FAIL\n%d checks WARN\n%d checks INFO\n%d checks UNKNOWN\n\n",
+		summary.Pass, summary.Fail, summary.Warn, summary.Info, summary.Unknown,
 	)
 }
 
@@ -492,6 +503,7 @@ func getSummaryTotals(controlsCollection []*check.Controls) check.Summary {
 		totalSummary.Warn = totalSummary.Warn + summary.Warn
 		totalSummary.Pass = totalSummary.Pass + summary.Pass
 		totalSummary.Info = totalSummary.Info + summary.Info
+		totalSummary.Unknown = totalSummary.Unknown + summary.Unknown
 	}
 	return totalSummary
 }

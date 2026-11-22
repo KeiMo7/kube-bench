@@ -5,6 +5,7 @@
 0 checks FAIL
 0 checks WARN
 0 checks INFO
+0 checks UNKNOWN
 
 [INFO] 2 Control Plane Configuration
 [INFO] 2.1 DISA Category Code I
@@ -73,6 +74,7 @@ Ref: https://docs.aws.amazon.com/eks/latest/userguide/update-cluster.html
 2 checks FAIL
 9 checks WARN
 0 checks INFO
+0 checks UNKNOWN
 
 [INFO] 3 Worker Node Security Configuration
 [INFO] 3.1 DISA Category Code I
@@ -156,6 +158,7 @@ Upgrade the Master and Worker nodes to the latest version of kubectl.
 4 checks FAIL
 6 checks WARN
 0 checks INFO
+0 checks UNKNOWN
 
 [INFO] 4 Policies
 [INFO] 4.1 Policies - DISA Category Code I
@@ -179,6 +182,7 @@ V-242417 Move any user pods that are present in the Kubernetes system namespaces
 0 checks FAIL
 3 checks WARN
 0 checks INFO
+0 checks UNKNOWN
 
 [INFO] 5 Managed Services
 [INFO] 5.1 DISA Category Code I
@@ -257,10 +261,12 @@ Ref: https://docs.aws.amazon.com/eks/latest/userguide/platform-versions.html
 0 checks FAIL
 1 checks WARN
 62 checks INFO
+0 checks UNKNOWN
 
 == Summary total ==
 8 checks PASS
 6 checks FAIL
 19 checks WARN
 62 checks INFO
+0 checks UNKNOWN
 

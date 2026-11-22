@@ -17,7 +17,201 @@ package check
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestCheck_Run_Unknown(t *testing.T) {
+	flagTest := func() *tests {
+		return &tests{TestItems: []*testItem{{Flag: "hello", Set: true}}}
+	}
+
+	t.Run("audit command cannot be executed -> UNKNOWN", func(t *testing.T) {
+		c := Check{Scored: true, Audit: "/nonexistent/audit-command --flag", Tests: flagTest()}
+		if state := c.run(); state != UNKNOWN {
+			t.Errorf("expected UNKNOWN, got %s", state)
+		}
+		if !strings.Contains(c.Reason, "failed to run") {
+			t.Errorf("expected reason to mention the failure, got %q", c.Reason)
+		}
+		if c.Evidence == nil || !strings.Contains(c.Evidence.Command, "/nonexistent/audit-command") {
+			t.Errorf("expected evidence to record the command, got %+v", c.Evidence)
+		}
+	})
+
+	t.Run("audit command times out -> UNKNOWN", func(t *testing.T) {
+		old := auditTimeout
+		auditTimeout = 100 * time.Millisecond
+		defer func() { auditTimeout = old }()
+
+		c := Check{Scored: true, Audit: "sleep 5", Tests: flagTest()}
+		if state := c.run(); state != UNKNOWN {
+			t.Errorf("expected UNKNOWN, got %s", state)
+		}
+		if !strings.Contains(c.Reason, "timed out") {
+			t.Errorf("expected reason to mention the timeout, got %q", c.Reason)
+		}
+	})
+
+	t.Run("audit command runs but output is empty -> UNKNOWN", func(t *testing.T) {
+		c := Check{Scored: true, Audit: "true", Tests: flagTest()}
+		if state := c.run(); state != UNKNOWN {
+			t.Errorf("expected UNKNOWN, got %s", state)
+		}
+		if !strings.Contains(c.Reason, "no output") {
+			t.Errorf("expected reason to mention the empty output, got %q", c.Reason)
+		}
+	})
+
+	t.Run("empty output with an absence test keeps existing semantics -> PASS", func(t *testing.T) {
+		c := Check{
+			Scored: true,
+			Audit:  "true",
+			Tests:  &tests{TestItems: []*testItem{{Flag: "hello", Set: false}}},
+		}
+		if state := c.run(); state != PASS {
+			t.Errorf("expected PASS, got %s", state)
+		}
+	})
+
+	t.Run("audit output cannot be parsed -> UNKNOWN", func(t *testing.T) {
+		c := Check{
+			Scored:      true,
+			AuditConfig: "echo 'broken: [yaml'",
+			Tests: &tests{TestItems: []*testItem{{
+				Path:    "{.enabled}",
+				Set:     true,
+				Compare: compare{Op: "eq", Value: "false"},
+			}}},
+		}
+		if state := c.run(); state != UNKNOWN {
+			t.Errorf("expected UNKNOWN, got %s", state)
+		}
+		if !strings.Contains(c.Reason, "failed to load YAML or JSON") {
+			t.Errorf("expected reason to mention the parse failure, got %q", c.Reason)
+		}
+	})
+
+	t.Run("one unparseable sub-check makes the whole check UNKNOWN", func(t *testing.T) {
+		c := Check{
+			Scored:      true,
+			Audit:       "echo hello",
+			AuditConfig: "echo 'broken: [yaml'",
+			Tests: &tests{
+				BinOp: or,
+				TestItems: []*testItem{
+					{Flag: "hello", Set: true},
+					{Path: "{.enabled}", Set: true, Compare: compare{Op: "eq", Value: "false"}},
+				},
+			},
+		}
+		if state := c.run(); state != UNKNOWN {
+			t.Errorf("expected UNKNOWN, got %s", state)
+		}
+	})
+
+	t.Run("normal check still evaluates -> PASS", func(t *testing.T) {
+		c := Check{Scored: true, Audit: "echo hello", Tests: flagTest()}
+		if state := c.run(); state != PASS {
+			t.Errorf("expected PASS, got %s", state)
+		}
+		if c.Evidence == nil || c.Evidence.Command == "" || c.Evidence.Output == "" || c.Evidence.Reason == "" {
+			t.Errorf("expected evidence linking command, output and reason, got %+v", c.Evidence)
+		}
+	})
+}
+
+func TestCheck_Run_Evidence(t *testing.T) {
+	t.Run("long output is truncated and the truncation point marked", func(t *testing.T) {
+		c := Check{
+			Scored: true,
+			Audit:  "head -c 3000 /dev/zero | tr '\\0' 'a'",
+			Tests:  &tests{TestItems: []*testItem{{Flag: "aaa", Set: true}}},
+		}
+		if state := c.run(); state != PASS {
+			t.Fatalf("expected PASS, got %s", state)
+		}
+		if c.Evidence == nil || !c.Evidence.Truncated {
+			t.Fatalf("expected evidence to be marked truncated, got %+v", c.Evidence)
+		}
+		if !strings.Contains(c.Evidence.Output, "[truncated: showing first 1024 of") {
+			t.Errorf("expected truncation marker in evidence output, got %q...", c.Evidence.Output[:80])
+		}
+		if len(c.Evidence.Output) > 1024+200 {
+			t.Errorf("evidence output exceeds retention cap: %d chars", len(c.Evidence.Output))
+		}
+	})
+
+	t.Run("secrets and internal paths are redacted from evidence", func(t *testing.T) {
+		c := Check{
+			Scored: true,
+			Audit:  `echo "token=supersecret123"; echo "config at /home/someone/config.yaml"`,
+			Tests:  &tests{TestItems: []*testItem{{Flag: "token", Set: true}}},
+		}
+		if state := c.run(); state != PASS {
+			t.Fatalf("expected PASS, got %s", state)
+		}
+		if strings.Contains(c.Evidence.Output, "supersecret123") || strings.Contains(c.Evidence.Command, "supersecret123") {
+			t.Errorf("secret leaked into evidence: %+v", c.Evidence)
+		}
+		if strings.Contains(c.Evidence.Output, "/home/someone") {
+			t.Errorf("internal path leaked into evidence: %+v", c.Evidence)
+		}
+		if !strings.Contains(c.Evidence.Output, redactedValue) || !strings.Contains(c.Evidence.Output, redactedPath) {
+			t.Errorf("expected redaction markers in evidence, got %q", c.Evidence.Output)
+		}
+	})
+
+	t.Run("evidence collection failure still yields UNKNOWN, not FAIL", func(t *testing.T) {
+		c := Check{Scored: true, Audit: "cat /definitely/not/here", Tests: &tests{TestItems: []*testItem{{Flag: "x", Set: true}}}}
+		if state := c.run(); state != UNKNOWN {
+			t.Errorf("expected UNKNOWN, got %s", state)
+		}
+		if c.Evidence == nil || c.Evidence.Reason == "" {
+			t.Errorf("expected evidence explaining the failure, got %+v", c.Evidence)
+		}
+	})
+}
+
+func TestCheck_RerunKeepsPreviousConclusion(t *testing.T) {
+	c := Check{
+		Scored: true,
+		Audit:  "echo hello",
+		Tests:  &tests{TestItems: []*testItem{{Flag: "hello", Set: true}}},
+	}
+	if state := c.run(); state != PASS {
+		t.Fatalf("expected PASS, got %s", state)
+	}
+
+	// Re-run with a command that now fails: the last conclusion wins and
+	// the previous one is noted.
+	c.Audit = "false"
+	if state := c.run(); state != UNKNOWN {
+		t.Fatalf("expected UNKNOWN, got %s", state)
+	}
+	if c.PreviousState != PASS {
+		t.Errorf("expected previous state PASS to be noted, got %q", c.PreviousState)
+	}
+}
+
+func TestCheck_Override(t *testing.T) {
+	c := &Check{}
+	c.State = UNKNOWN
+	c.Reason = "audit command failed"
+
+	c.Override(PASS, "manual review: accepted risk")
+	if c.State != PASS {
+		t.Errorf("expected overridden state PASS, got %s", c.State)
+	}
+	if c.PreviousState != UNKNOWN {
+		t.Errorf("expected original conclusion UNKNOWN preserved, got %q", c.PreviousState)
+	}
+	if c.PreviousReason != "audit command failed" {
+		t.Errorf("expected original reason preserved, got %q", c.PreviousReason)
+	}
+	if c.Reason != "manual review: accepted risk" {
+		t.Errorf("expected override reason recorded, got %q", c.Reason)
+	}
+}
 
 func TestCheck_Run(t *testing.T) {
 	type TestCase struct {
@@ -83,7 +277,7 @@ func TestCheck_Run(t *testing.T) {
 			Expected: PASS,
 		},
 		{
-			name: "Scored checks that pass should FAIL when config file is not present",
+			name: "Scored check whose audit command cannot run (config file not present) should be UNKNOWN",
 			check: Check{
 				Scored:      true,
 				AuditConfig: "/test/config.yaml",
@@ -92,7 +286,7 @@ func TestCheck_Run(t *testing.T) {
 					Set:  true,
 				}}},
 			},
-			Expected: FAIL,
+			Expected: UNKNOWN,
 		},
 	}
 

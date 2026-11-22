@@ -30,8 +30,8 @@ import (
 )
 
 const (
-	// UNKNOWN is when the AWS account can't be found
-	UNKNOWN = "Unknown"
+	// AWS_ACCOUNT_UNKNOWN is when the AWS account can't be found
+	AWS_ACCOUNT_UNKNOWN = "Unknown"
 	// ARN for the AWS Security Hub service
 	ARN = "arn:aws:securityhub:%s::product/aqua-security/kube-bench"
 	// SCHEMA for the AWS Security Hub service
@@ -58,14 +58,15 @@ type Controls struct {
 
 // Group is a collection of similar checks.
 type Group struct {
-	ID     string   `yaml:"id" json:"section"`
-	Type   string   `yaml:"type" json:"type"`
-	Pass   int      `json:"pass"`
-	Fail   int      `json:"fail"`
-	Warn   int      `json:"warn"`
-	Info   int      `json:"info"`
-	Text   string   `json:"desc"`
-	Checks []*Check `json:"results"`
+	ID      string   `yaml:"id" json:"section"`
+	Type    string   `yaml:"type" json:"type"`
+	Pass    int      `json:"pass"`
+	Fail    int      `json:"fail"`
+	Warn    int      `json:"warn"`
+	Info    int      `json:"info"`
+	Unknown int      `json:"unknown"`
+	Text    string   `json:"desc"`
+	Checks  []*Check `json:"results"`
 }
 
 // Summary is a summary of the results of control checks run.
@@ -74,6 +75,21 @@ type Summary struct {
 	Fail int `json:"total_fail"`
 	Warn int `json:"total_warn"`
 	Info int `json:"total_info"`
+	// Unknown counts checks that could not be evaluated. It is excluded
+	// from the compliance-rate numerator and denominator.
+	Unknown int `json:"total_unknown"`
+}
+
+// Evaluated returns the number of checks that reached an evaluated
+// conclusion (PASS, FAIL, WARN or INFO).
+func (s Summary) Evaluated() int {
+	return s.Pass + s.Fail + s.Warn + s.Info
+}
+
+// Total returns the total number of checks: evaluated plus unable to
+// evaluate. The two groups are mutually exclusive.
+func (s Summary) Total() int {
+	return s.Evaluated() + s.Unknown
 }
 
 // Predicate a predicate on the given Group and Check arguments.
@@ -99,7 +115,7 @@ func NewControls(t NodeType, in []byte, detectedVersion string) (*Controls, erro
 func (controls *Controls) RunChecks(runner Runner, filter Predicate, skipIDMap map[string]bool) Summary {
 	var g []*Group
 	m := make(map[string]*Group)
-	controls.Summary.Pass, controls.Summary.Fail, controls.Summary.Warn, controls.Info = 0, 0, 0, 0
+	controls.Summary.Pass, controls.Summary.Fail, controls.Summary.Warn, controls.Summary.Info, controls.Summary.Unknown = 0, 0, 0, 0, 0
 
 	for _, group := range controls.Groups {
 		for _, check := range group.Checks {
@@ -158,8 +174,9 @@ func (controls *Controls) JUnit() ([]byte, error) {
 	suite := reporters.JUnitTestSuite{
 		Name:      controls.Text,
 		TestCases: []reporters.JUnitTestCase{},
-		Tests:     controls.Summary.Pass + controls.Summary.Fail + controls.Summary.Info + controls.Summary.Warn,
+		Tests:     controls.Summary.Pass + controls.Summary.Fail + controls.Summary.Info + controls.Summary.Warn + controls.Summary.Unknown,
 		Failures:  controls.Summary.Fail,
+		Errors:    controls.Summary.Unknown,
 	}
 	for _, g := range controls.Groups {
 		for _, check := range g.Checks {
@@ -185,6 +202,15 @@ func (controls *Controls) JUnit() ([]byte, error) {
 				// WARN and INFO are two different versions of skipped tests. Either way it would be a false positive/negative to report
 				// it any other way.
 				tc.Skipped = &reporters.JUnitSkipped{}
+			case UNKNOWN:
+				// UNKNOWN means the check could not be evaluated. JUnit has
+				// no dedicated state for this; report it as a skipped test
+				// with an explicit message rather than silently passing it.
+				msg := check.Reason
+				if msg == "" {
+					msg = "check could not be evaluated"
+				}
+				tc.Skipped = &reporters.JUnitSkipped{Message: fmt.Sprintf("UNKNOWN: %s", msg)}
 			case PASS:
 			default:
 				glog.Warningf("Unrecognized state %s", check.State)
@@ -227,7 +253,19 @@ func (controls *Controls) ASFF() ([]types.AwsSecurityFinding, error) {
 	tf := ti.Format(time.RFC3339)
 	for _, g := range controls.Groups {
 		for _, check := range g.Checks {
-			if check.State == FAIL || check.State == WARN {
+			// FAIL and WARN keep their historical HIGH severity so the
+			// alerting chain keeps recognizing them; UNKNOWN findings are
+			// reported as INFORMATIONAL so they stay visible without
+			// paging as violations.
+			severity := types.SeverityLabelHigh
+			switch check.State {
+			case FAIL, WARN:
+			case UNKNOWN:
+				severity = types.SeverityLabelInformational
+			default:
+				continue
+			}
+			{
 				// ASFF ProductFields['Actual result'] can't be longer than 1024 characters
 				actualValue := check.ActualValue
 				remediation := check.Remediation
@@ -263,7 +301,7 @@ func (controls *Controls) ASFF() ([]types.AwsSecurityFinding, error) {
 					UpdatedAt:     aws.String(tf),
 					Types:         []string{*aws.String(TYPE)},
 					Severity: &types.Severity{
-						Label: types.SeverityLabelHigh,
+						Label: severity,
 					},
 					Remediation: &types.Remediation{
 						Recommendation: &types.Recommendation{
@@ -274,6 +312,7 @@ func (controls *Controls) ASFF() ([]types.AwsSecurityFinding, error) {
 						"Reason":          reason,
 						"Actual result":   actualValue,
 						"Expected result": check.ExpectedResult,
+						"State":           string(check.State),
 						"Section":         fmt.Sprintf("%s %s", controls.ID, controls.Text),
 						"Subsection":      fmt.Sprintf("%s %s", g.ID, g.Text),
 					},
@@ -300,31 +339,80 @@ func getConfig(name string) (string, error) {
 }
 
 func summarize(controls *Controls, state State) {
-	switch state {
-	case PASS:
-		controls.Summary.Pass++
-	case FAIL:
-		controls.Summary.Fail++
-	case WARN:
-		controls.Summary.Warn++
-	case INFO:
-		controls.Summary.Info++
-	default:
+	if !controls.Summary.add(state, 1) {
 		glog.Warningf("Unrecognized state %s", state)
 	}
 }
 
 func summarizeGroup(group *Group, state State) {
-	switch state {
-	case PASS:
-		group.Pass++
-	case FAIL:
-		group.Fail++
-	case WARN:
-		group.Warn++
-	case INFO:
-		group.Info++
-	default:
+	if !group.add(state, 1) {
 		glog.Warningf("Unrecognized state %s", state)
 	}
+}
+
+// add adjusts the count for the given state by delta. It reports whether
+// the state was recognized.
+func (s *Summary) add(state State, delta int) bool {
+	switch state {
+	case PASS:
+		s.Pass += delta
+	case FAIL:
+		s.Fail += delta
+	case WARN:
+		s.Warn += delta
+	case INFO:
+		s.Info += delta
+	case UNKNOWN:
+		s.Unknown += delta
+	default:
+		return false
+	}
+	return true
+}
+
+// add adjusts the group count for the given state by delta. It reports
+// whether the state was recognized.
+func (g *Group) add(state State, delta int) bool {
+	switch state {
+	case PASS:
+		g.Pass += delta
+	case FAIL:
+		g.Fail += delta
+	case WARN:
+		g.Warn += delta
+	case INFO:
+		g.Info += delta
+	case UNKNOWN:
+		g.Unknown += delta
+	default:
+		return false
+	}
+	return true
+}
+
+// OverrideResult applies a manual review decision to the check with the
+// given ID: the new conclusion replaces the old one, the original
+// conclusion and reason are preserved on the check, and the summaries are
+// adjusted so the counts stay consistent.
+func (controls *Controls) OverrideResult(checkID string, state State, reason string) error {
+	for _, g := range controls.Groups {
+		for _, c := range g.Checks {
+			if c.ID != checkID {
+				continue
+			}
+			old := c.State
+			c.Override(state, reason)
+			if old != "" && old != state {
+				controls.Summary.add(old, -1)
+				controls.Summary.add(state, 1)
+				g.add(old, -1)
+				g.add(state, 1)
+			} else if old == "" {
+				controls.Summary.add(state, 1)
+				g.add(state, 1)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("check %s not found", checkID)
 }

@@ -696,6 +696,93 @@ func TestGetSummaryTotals(t *testing.T) {
 	assert.Equal(t, 49, resultTotals.Pass)
 }
 
+func TestPrintSummaryUnknown(t *testing.T) {
+	rescueStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	printSummary(check.Summary{Pass: 3, Unknown: 2}, "totals")
+	w.Close()
+	out, _ := io.ReadAll(r)
+	os.Stdout = rescueStdout
+
+	assert.Contains(t, string(out), "3 checks PASS\n0 checks FAIL\n0 checks WARN\n0 checks INFO\n2 checks UNKNOWN\n\n")
+}
+
+func TestPrettyPrintUnknown(t *testing.T) {
+	controls := &check.Controls{
+		ID:   "1",
+		Text: "test",
+		Type: check.MASTER,
+		Groups: []*check.Group{
+			{
+				ID:   "1.1",
+				Text: "group",
+				Checks: []*check.Check{
+					{ID: "1.1.1", Text: "unevaluable check", State: check.UNKNOWN, Reason: "audit command failed", Remediation: "fix it"},
+				},
+			},
+		},
+		Summary: check.Summary{Unknown: 1},
+	}
+
+	rescueStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	noSummary = false
+	noRemediations = false
+	prettyPrint(controls, controls.Summary)
+	w.Close()
+	out, _ := io.ReadAll(r)
+	os.Stdout = rescueStdout
+
+	// The unevaluated check must be visible in the results, in the
+	// remediations section and in the summary. (The "[UNKNOWN]" status
+	// prefix is printed through the color package, which writes to the
+	// real stdout, so only the plain-text parts are asserted here.)
+	assert.Contains(t, string(out), "1.1.1 unevaluable check")
+	assert.Contains(t, string(out), "1.1.1 check could not be evaluated: audit command failed")
+	assert.Contains(t, string(out), "1 checks UNKNOWN")
+}
+
+func TestWriteJSONOutputWithUnknown(t *testing.T) {
+	defer func() {
+		controlsCollection = []*check.Controls{}
+		jsonFmt = false
+		noTotals = false
+	}()
+	jsonFmt = true
+	controlsCollection = []*check.Controls{
+		{
+			ID:   "1",
+			Text: "test",
+			Type: check.MASTER,
+			Groups: []*check.Group{
+				{
+					ID:   "1.1",
+					Text: "group",
+					Checks: []*check.Check{
+						{ID: "1.1.1", Text: "unevaluable check", State: check.UNKNOWN, Reason: "audit command failed"},
+					},
+				},
+			},
+			Summary: check.Summary{Unknown: 1},
+		},
+	}
+
+	rescueStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	writeOutput(controlsCollection)
+	w.Close()
+	out, _ := io.ReadAll(r)
+	os.Stdout = rescueStdout
+
+	// The new category must survive all the way into the JSON report.
+	assert.Contains(t, string(out), `"status":"UNKNOWN"`)
+	assert.Contains(t, string(out), `"total_unknown":1`)
+	assert.Contains(t, string(out), `"unknown":0`)
+}
+
 func TestPrintSummary(t *testing.T) {
 	controlsCollection, err := parseControlsJsonFile("./testdata/controlsCollection.json")
 	if err != nil {
@@ -711,7 +798,7 @@ func TestPrintSummary(t *testing.T) {
 	out, _ := io.ReadAll(r)
 	os.Stdout = rescueStdout
 
-	assert.Contains(t, string(out), "49 checks PASS\n12 checks FAIL\n14 checks WARN\n0 checks INFO\n\n")
+	assert.Contains(t, string(out), "49 checks PASS\n12 checks FAIL\n14 checks WARN\n0 checks INFO\n0 checks UNKNOWN\n\n")
 }
 
 func TestPrettyPrintNoSummary(t *testing.T) {

@@ -354,6 +354,127 @@ func TestControls_JUnitIncludesJSON(t *testing.T) {
 	}
 }
 
+func TestControls_RunChecks_Unknown(t *testing.T) {
+	t.Run("Should count UNKNOWN separately and keep evaluated+unevaluated equal to total", func(t *testing.T) {
+		// given
+		runner := new(mockRunner)
+		in := []byte(`
+---
+type: "master"
+groups:
+- id: G1
+  checks:
+  - id: G1/C1
+  - id: G1/C2
+  - id: G1/C3
+`)
+		controls, err := NewControls(MASTER, in, "")
+		assert.NoError(t, err)
+
+		runner.On("Run", controls.Groups[0].Checks[0]).Return(PASS)
+		runner.On("Run", controls.Groups[0].Checks[1]).Return(UNKNOWN)
+		runner.On("Run", controls.Groups[0].Checks[2]).Return(INFO)
+
+		var runAll Predicate = func(group *Group, c *Check) bool { return true }
+		controls.RunChecks(runner, runAll, map[string]bool{})
+
+		G1 := controls.Groups[0]
+		assert.Equal(t, 1, G1.Pass)
+		assert.Equal(t, 1, G1.Unknown)
+		assert.Equal(t, 1, G1.Info)
+
+		assert.Equal(t, 1, controls.Summary.Unknown)
+		assert.Equal(t, 3, controls.Summary.Total())
+		assert.Equal(t, 2, controls.Summary.Evaluated())
+		assert.Equal(t, controls.Summary.Evaluated()+controls.Summary.Unknown, controls.Summary.Total())
+	})
+}
+
+func TestControls_JUnitUnknown(t *testing.T) {
+	controls := &Controls{
+		Summary: Summary{Pass: 1, Unknown: 1},
+		Groups: []*Group{
+			{
+				ID: "g1",
+				Checks: []*Check{
+					{ID: "check1id", Text: "check1text", State: PASS},
+					{ID: "check2id", Text: "check2text", State: UNKNOWN, Reason: "audit command failed"},
+				},
+			},
+		},
+	}
+	junitBytes, err := controls.JUnit()
+	assert.NoError(t, err)
+	out := string(junitBytes)
+	// The unknown check must be visible: counted as an error on the suite
+	// and reported as a skipped test with an explicit message, never as a pass.
+	assert.Contains(t, out, `tests="2"`)
+	assert.Contains(t, out, `errors="1"`)
+	assert.Contains(t, out, `<skipped>UNKNOWN: audit command failed</skipped>`)
+	assert.Contains(t, out, `&#34;status&#34;:&#34;UNKNOWN&#34;`)
+}
+
+func TestControls_ASFF_Unknown(t *testing.T) {
+	viper.Set("AWS_ACCOUNT", "foo account")
+	viper.Set("CLUSTER_ARN", "foo Cluster")
+	viper.Set("AWS_REGION", "somewhere")
+	controls := &Controls{
+		ID:      "test1",
+		Version: "1",
+		Text:    "test runner",
+		Groups: []*Group{
+			{
+				ID:   "g1",
+				Text: "Group text",
+				Checks: []*Check{
+					{ID: "check1id", Text: "check1text", State: UNKNOWN, Reason: "audit command failed"},
+				},
+			},
+		},
+	}
+	findings, err := controls.ASFF()
+	assert.NoError(t, err)
+	assert.Len(t, findings, 1)
+	assert.Equal(t, types.SeverityLabelInformational, findings[0].Severity.Label)
+	assert.Equal(t, "UNKNOWN", findings[0].ProductFields["State"])
+	assert.Equal(t, "audit command failed", findings[0].ProductFields["Reason"])
+}
+
+func TestControls_OverrideResult(t *testing.T) {
+	controls := &Controls{
+		Summary: Summary{Pass: 1, Unknown: 1},
+		Groups: []*Group{
+			{
+				ID:      "g1",
+				Pass:    1,
+				Unknown: 1,
+				Checks: []*Check{
+					{ID: "G1/C1", State: UNKNOWN, Reason: "audit command failed"},
+					{ID: "G1/C2", State: PASS},
+				},
+			},
+		},
+	}
+
+	err := controls.OverrideResult("G1/C1", FAIL, "manual review: confirmed violation")
+	assert.NoError(t, err)
+
+	c := controls.Groups[0].Checks[0]
+	assert.Equal(t, FAIL, c.State)
+	assert.Equal(t, UNKNOWN, c.PreviousState)
+	assert.Equal(t, "audit command failed", c.PreviousReason)
+	assert.Equal(t, "manual review: confirmed violation", c.Reason)
+
+	// summaries adjusted: one less UNKNOWN, one more FAIL
+	assert.Equal(t, 0, controls.Summary.Unknown)
+	assert.Equal(t, 1, controls.Summary.Fail)
+	assert.Equal(t, 1, controls.Summary.Pass)
+	assert.Equal(t, 0, controls.Groups[0].Unknown)
+	assert.Equal(t, 1, controls.Groups[0].Fail)
+
+	assert.Error(t, controls.OverrideResult("no/such-check", PASS, "reason"))
+}
+
 func assertEqualGroupSummary(t *testing.T, pass, fail, info, warn int, actual *Group) {
 	t.Helper()
 	assert.Equal(t, pass, actual.Pass)
@@ -426,6 +547,7 @@ func TestControls_ASFF(t *testing.T) {
 						"Reason":          "failed",
 						"Actual result":   "failed",
 						"Expected result": "failed",
+						"State":           "FAIL",
 						"Section":         fmt.Sprintf("%s %s", "test1", "test runnner"),
 						"Subsection":      fmt.Sprintf("%s %s", "g1", "Group text"),
 					},

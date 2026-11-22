@@ -177,6 +177,7 @@ on the master node and set the below parameter.
 10 checks FAIL
 11 checks WARN
 0 checks INFO
+0 checks UNKNOWN
 
 [INFO] 2 Etcd Node Configuration
 [INFO] 2 Etcd Node Configuration Files
@@ -193,6 +194,7 @@ on the master node and set the below parameter.
 0 checks FAIL
 0 checks WARN
 0 checks INFO
+0 checks UNKNOWN
 
 [INFO] 3 Control Plane Configuration
 [INFO] 3.1 Authentication and Authorization
@@ -216,6 +218,7 @@ minimum.
 0 checks FAIL
 3 checks WARN
 0 checks INFO
+0 checks UNKNOWN
 
 [INFO] 4 Worker Node Security Configuration
 [INFO] 4.1 Worker Node Configuration Files
@@ -298,6 +301,7 @@ systemctl restart kubelet.service
 1 checks FAIL
 5 checks WARN
 0 checks INFO
+0 checks UNKNOWN
 
 [INFO] 5 Kubernetes Policies
 [INFO] 5.1 RBAC and Service Accounts
@@ -424,10 +428,12 @@ resources and that all new resources are created in a specific namespace.
 0 checks FAIL
 26 checks WARN
 0 checks INFO
+0 checks UNKNOWN
 
 == Summary total ==
 67 checks PASS
 11 checks FAIL
 45 checks WARN
 0 checks INFO
+0 checks UNKNOWN
 
