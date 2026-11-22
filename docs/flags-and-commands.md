@@ -31,6 +31,7 @@ Flag | Description
 -v, --v Level | log level for V logs (default 0)
 --unscored | Run the unscored CIS checks (default true)
 --version string | Manually specify Kubernetes version, automatically detected if unset
+--waivers string | Path to a waiver file describing accepted risks and not-applicable controls. See [Waivers](waivers.md).
 --vmodule moduleSpec | comma-separated list of pattern=N settings for file-filtered logging
 
 ### Examples 

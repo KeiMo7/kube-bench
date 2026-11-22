@@ -36,6 +36,8 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			exitWithError(fmt.Errorf("unable to get benchmark version. error: %v", err))
 		}
+		initWaivers()
+		prepareWaiverScopes(bv)
 
 		glog.V(2).Infof("Checking targets %v for %v", targets, bv)
 		benchmarkVersionToTargetsMap, err := loadTargetMapping(viper.GetViper())
@@ -80,6 +82,7 @@ func run(targets []string, benchmarkVersion string) (err error) {
 		runChecks(testType, yamlFile, detecetedKubeVersion)
 	}
 
+	applyWaivers()
 	writeOutput(controlsCollection)
 	return nil
 }

@@ -18,6 +18,7 @@ nav:
   - Configuration Options:
       - Understanding the yamls: controls.md
       - Architecture: architecture.md
+      - Waivers: waivers.md
   - Contributing: CONTRIBUTING.md
 
 markdown_extensions:

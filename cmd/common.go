@@ -211,6 +211,31 @@ func prettyPrint(r *check.Controls, summary check.Summary) {
 	}
 }
 
+// printWaiverSection renders one line per applied waiver so the audit trail
+// (reason, requester, approver, expiry) survives even with --noresults.
+func printWaiverSection(collection []*check.Controls) {
+	type row struct{ id, summary string }
+	var rows []row
+	for _, controls := range collection {
+		for _, g := range controls.Groups {
+			for _, c := range g.Checks {
+				if c.Waiver != nil {
+					rows = append(rows, row{id: c.ID, summary: c.Waiver.Summary()})
+				}
+			}
+		}
+	}
+	if len(rows) == 0 {
+		return
+	}
+
+	colors[check.INFO].Printf("== Waivers ==\n")
+	for _, r := range rows {
+		fmt.Printf("%s %s\n", r.id, r.summary)
+	}
+	fmt.Println()
+}
+
 func printSummary(summary check.Summary, sectionName string) {
 	var res check.State
 	if summary.Fail > 0 {
@@ -222,9 +247,19 @@ func printSummary(summary check.Summary, sectionName string) {
 	}
 
 	colors[res].Printf("== Summary %s ==\n", sectionName)
-	fmt.Printf("%d checks PASS\n%d checks FAIL\n%d checks WARN\n%d checks INFO\n\n",
+	fmt.Printf("%d checks PASS\n%d checks FAIL\n%d checks WARN\n%d checks INFO\n",
 		summary.Pass, summary.Fail, summary.Warn, summary.Info,
 	)
+	// Waived results are broken out so "not applicable" and "accepted risk"
+	// never hide inside the skip/INFO bucket. Lines are omitted entirely when
+	// no waiver was applied, keeping waiver-free output byte-for-byte stable.
+	if summary.NotApplicable > 0 {
+		fmt.Printf("%d checks NOT APPLICABLE\n", summary.NotApplicable)
+	}
+	if summary.AcceptedRisk > 0 {
+		fmt.Printf("%d checks ACCEPTED RISK\n", summary.AcceptedRisk)
+	}
+	fmt.Println()
 }
 
 // loadConfig finds the correct config dir based on the kubernetes version,
@@ -422,7 +457,17 @@ func writeOutput(controlsCollection []*check.Controls) {
 func writeJSONOutput(controlsCollection []*check.Controls) {
 	var out []byte
 	var err error
-	if !noTotals {
+	if report := waiverReport(); report != nil {
+		// A waiver was supplied: wrap the results with the waiver metadata so
+		// consumers can tell what was waived, why and until when.
+		var totals check.OverallControls
+		totals.Controls = controlsCollection
+		if !noTotals {
+			totals.Totals = getSummaryTotals(controlsCollection)
+		}
+		totals.Waivers = report
+		out, err = json.Marshal(totals)
+	} else if !noTotals {
 		var totals check.OverallControls
 		totals.Controls = controlsCollection
 		totals.Totals = getSummaryTotals(controlsCollection)
@@ -479,6 +524,7 @@ func writeStdoutOutput(controlsCollection []*check.Controls) {
 		summary := controls.Summary
 		prettyPrint(controls, summary)
 	}
+	printWaiverSection(controlsCollection)
 	if !noTotals {
 		printSummary(getSummaryTotals(controlsCollection), "total")
 	}
@@ -492,6 +538,8 @@ func getSummaryTotals(controlsCollection []*check.Controls) check.Summary {
 		totalSummary.Warn = totalSummary.Warn + summary.Warn
 		totalSummary.Pass = totalSummary.Pass + summary.Pass
 		totalSummary.Info = totalSummary.Info + summary.Info
+		totalSummary.NotApplicable = totalSummary.NotApplicable + summary.NotApplicable
+		totalSummary.AcceptedRisk = totalSummary.AcceptedRisk + summary.AcceptedRisk
 	}
 	return totalSummary
 }

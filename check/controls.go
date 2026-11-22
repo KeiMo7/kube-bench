@@ -43,6 +43,8 @@ const (
 type OverallControls struct {
 	Controls []*Controls
 	Totals   Summary
+	// Waivers is only present when a waiver file was supplied.
+	Waivers *WaiverReport `json:"Waivers,omitempty"`
 }
 
 // Controls holds all controls to check for master nodes.
@@ -58,22 +60,26 @@ type Controls struct {
 
 // Group is a collection of similar checks.
 type Group struct {
-	ID     string   `yaml:"id" json:"section"`
-	Type   string   `yaml:"type" json:"type"`
-	Pass   int      `json:"pass"`
-	Fail   int      `json:"fail"`
-	Warn   int      `json:"warn"`
-	Info   int      `json:"info"`
-	Text   string   `json:"desc"`
-	Checks []*Check `json:"results"`
+	ID            string   `yaml:"id" json:"section"`
+	Type          string   `yaml:"type" json:"type"`
+	Pass          int      `json:"pass"`
+	Fail          int      `json:"fail"`
+	Warn          int      `json:"warn"`
+	Info          int      `json:"info"`
+	NotApplicable int      `json:"not_applicable,omitempty"`
+	AcceptedRisk  int      `json:"accepted_risk,omitempty"`
+	Text          string   `json:"desc"`
+	Checks        []*Check `json:"results"`
 }
 
 // Summary is a summary of the results of control checks run.
 type Summary struct {
-	Pass int `json:"total_pass"`
-	Fail int `json:"total_fail"`
-	Warn int `json:"total_warn"`
-	Info int `json:"total_info"`
+	Pass          int `json:"total_pass"`
+	Fail          int `json:"total_fail"`
+	Warn          int `json:"total_warn"`
+	Info          int `json:"total_info"`
+	NotApplicable int `json:"total_not_applicable,omitempty"`
+	AcceptedRisk  int `json:"total_accepted_risk,omitempty"`
 }
 
 // Predicate a predicate on the given Group and Check arguments.
@@ -158,8 +164,9 @@ func (controls *Controls) JUnit() ([]byte, error) {
 	suite := reporters.JUnitTestSuite{
 		Name:      controls.Text,
 		TestCases: []reporters.JUnitTestCase{},
-		Tests:     controls.Summary.Pass + controls.Summary.Fail + controls.Summary.Info + controls.Summary.Warn,
-		Failures:  controls.Summary.Fail,
+		Tests: controls.Summary.Pass + controls.Summary.Fail + controls.Summary.Info +
+			controls.Summary.Warn + controls.Summary.NotApplicable + controls.Summary.AcceptedRisk,
+		Failures: controls.Summary.Fail,
 	}
 	for _, g := range controls.Groups {
 		for _, check := range g.Checks {
@@ -185,6 +192,11 @@ func (controls *Controls) JUnit() ([]byte, error) {
 				// WARN and INFO are two different versions of skipped tests. Either way it would be a false positive/negative to report
 				// it any other way.
 				tc.Skipped = &reporters.JUnitSkipped{}
+			case NOTAPPLICABLE, ACCEPTEDRISK:
+				// Waived results are skipped, but unlike WARN/INFO they carry an
+				// explicit audit trail in the skip message so CI consumers can
+				// tell an accepted risk from a test that simply did not run.
+				tc.Skipped = &reporters.JUnitSkipped{Message: string(check.State) + ": " + check.Waiver.Summary()}
 			case PASS:
 			default:
 				glog.Warningf("Unrecognized state %s", check.State)
@@ -309,6 +321,10 @@ func summarize(controls *Controls, state State) {
 		controls.Summary.Warn++
 	case INFO:
 		controls.Summary.Info++
+	case NOTAPPLICABLE:
+		controls.Summary.NotApplicable++
+	case ACCEPTEDRISK:
+		controls.Summary.AcceptedRisk++
 	default:
 		glog.Warningf("Unrecognized state %s", state)
 	}
@@ -324,6 +340,10 @@ func summarizeGroup(group *Group, state State) {
 		group.Warn++
 	case INFO:
 		group.Info++
+	case NOTAPPLICABLE:
+		group.NotApplicable++
+	case ACCEPTEDRISK:
+		group.AcceptedRisk++
 	default:
 		glog.Warningf("Unrecognized state %s", state)
 	}

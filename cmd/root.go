@@ -73,6 +73,8 @@ var RootCmd = &cobra.Command{
 		if err != nil {
 			exitWithError(fmt.Errorf("unable to determine benchmark version: %v", err))
 		}
+		initWaivers()
+		prepareWaiverScopes(bv)
 		glog.V(1).Infof("Running checks for benchmark %v", bv)
 
 		if isMaster() {
@@ -135,6 +137,7 @@ var RootCmd = &cobra.Command{
 			glog.V(1).Info("== Skipping managed services checks ==")
 		}
 
+		applyWaivers()
 		writeOutput(controlsCollection)
 		os.Exit(exitCodeSelection(controlsCollection))
 	},
@@ -171,6 +174,7 @@ func init() {
 	RootCmd.PersistentFlags().BoolVar(&filterOpts.Scored, "scored", true, "Run the scored CIS checks")
 	RootCmd.PersistentFlags().BoolVar(&filterOpts.Unscored, "unscored", true, "Run the unscored CIS checks")
 	RootCmd.PersistentFlags().StringVar(&skipIds, "skip", "", "List of comma separated values of checks to be skipped")
+	RootCmd.PersistentFlags().StringVar(&waiverFile, "waivers", "", "Path to a waiver file describing accepted risks and not-applicable controls")
 	RootCmd.PersistentFlags().BoolVar(&includeTestOutput, "include-test-output", false, "Prints the actual result when test fails")
 	RootCmd.PersistentFlags().StringVar(&outputFile, "outputfile", "", "Writes the results to output file when run with --json or --junit")
 

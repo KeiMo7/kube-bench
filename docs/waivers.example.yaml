@@ -1,0 +1,32 @@
+# Example waiver file. Enable with:
+#   kube-bench run --benchmark cis-1.11 --waivers docs/waivers.example.yaml
+benchmark: cis-1.11
+
+waivers:
+  - name: "api-server-file-perms"
+    node_type: master
+    check: "1.1.1"
+    kind: accepted-risk
+    reason: "Managed control plane enforces equivalent permissions via admission policy"
+    requester: "ops-team"
+    approver: "security-review-board"
+    starts: 2026-01-01
+    expires: 2030-12-31
+
+  - name: "worker-node-config-files"
+    node_type: node
+    group: "4.1"
+    kind: not-applicable
+    reason: "Worker nodes are managed by the cloud provider"
+    requester: "ops-team"
+    approver: "security-review-board"
+    expires: 2027-06-30
+
+  # A permanent waiver: omit expires.
+  - name: "legacy-policy"
+    node_type: master
+    check: "1.2.2"
+    kind: accepted-risk
+    reason: "Legacy token file remains until the Q3 migration"
+    requester: "platform-team"
+    approver: "ciso"

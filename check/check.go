@@ -38,6 +38,10 @@ const (
 	WARN State = "WARN"
 	// INFO informational message
 	INFO State = "INFO"
+	// NOTAPPLICABLE a check whose control is waived as not applicable.
+	NOTAPPLICABLE State = "NOT APPLICABLE"
+	// ACCEPTEDRISK a failing or warned check whose risk was explicitly accepted.
+	ACCEPTEDRISK State = "ACCEPTED RISK"
 
 	// SKIP for when a check should be skipped.
 	SKIP = "skip"
@@ -85,6 +89,9 @@ type Check struct {
 	AuditEnvOutput    string `json:"-"`
 	AuditConfigOutput string `json:"-"`
 	DisableEnvTesting bool   `json:"-"`
+	// Waiver is set when an active waiver reclassified this result. It carries
+	// the audit trail (reason, requester, approver, expiry) into every output.
+	Waiver *WaiverInfo `json:"waiver,omitempty"`
 }
 
 // Runner wraps the basic Run method.
