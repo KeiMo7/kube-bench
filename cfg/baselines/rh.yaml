@@ -1,0 +1,27 @@
+apiVersion: kube-bench.io/v1alpha1
+kind: BaselineManifest
+family: rh
+displayName: Red Hat OpenShift Benchmark
+platforms:
+  - ocp
+baselines:
+  - version: rh-0.7
+    versions: ["3.10-3.11"]
+    targets: [master, node]
+    definitions: ../rh-0.7
+  - version: rh-1.0
+    versions: ["4.0-4.1"]
+    targets: [master, node, controlplane, policies, etcd]
+    definitions: ../rh-1.0
+  - version: rh-1.4
+    versions: ["4.2-4.11"]
+    targets: [master, node, controlplane, policies, etcd]
+    definitions: ../rh-1.4
+  - version: rh-1.8
+    versions: ["4.12-4.13"]
+    targets: [master, node, controlplane, policies, etcd]
+    definitions: ../rh-1.8
+  - version: rh-1.9
+    versions: ["4.14-4.99"]
+    targets: [master, node, controlplane, policies, etcd]
+    definitions: ../rh-1.9

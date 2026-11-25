@@ -32,6 +32,13 @@ var runCmd = &cobra.Command{
 			exitWithError(fmt.Errorf("unable to get `targets` from command line :%v", err))
 		}
 
+		if len(baselineRequests) > 0 {
+			if err := runBaselines(baselineRequests, baselineDirs, targets); err != nil {
+				exitWithError(err)
+			}
+			os.Exit(exitCodeSelection(controlsCollection))
+		}
+
 		bv, err := getBenchmarkVersion(kubeVersion, benchmarkVersion, getPlatformInfo(), viper.GetViper())
 		if err != nil {
 			exitWithError(fmt.Errorf("unable to get benchmark version. error: %v", err))

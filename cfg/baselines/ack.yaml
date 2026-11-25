@@ -1,0 +1,11 @@
+apiVersion: kube-bench.io/v1alpha1
+kind: BaselineManifest
+family: ack
+displayName: Alibaba Cloud Container Service for Kubernetes Benchmark
+platforms:
+  - aliyun
+baselines:
+  - version: ack-1.0
+    versions: ["1.*"]
+    targets: [master, node, controlplane, etcd, policies, managedservices]
+    definitions: ../ack-1.0

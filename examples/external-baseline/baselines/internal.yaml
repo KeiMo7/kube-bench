@@ -1,0 +1,22 @@
+apiVersion: kube-bench.io/v1alpha1
+kind: BaselineManifest
+# Minimal fully-external baseline example. It can be selected with:
+#   kube-bench --baseline-dir ./examples/external-baseline \
+#              --baseline internal:1.31
+# No source change or recompilation is required: only this manifest and
+# the definition files under ./definitions are needed.
+family: internal
+displayName: Example Internal Security Baseline
+platforms:
+  - internal
+# Explicitly declared fallback: unmatched cluster versions degrade here
+# instead of failing.
+default: internal-2025.1
+baselines:
+  - version: internal-2025.1
+    displayName: Internal Baseline 2025.1
+    # Applies to all 1.31.x clusters and any future 1.x cluster via the
+    # wildcard entry; the exact entry is narrower and wins on 1.31.
+    versions: ["1.31", "1.*"]
+    targets: [master, node]
+    definitions: ../definitions/internal-2025.1

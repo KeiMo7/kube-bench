@@ -1,0 +1,27 @@
+apiVersion: kube-bench.io/v1alpha1
+kind: BaselineManifest
+family: rke2
+displayName: Rancher RKE2 Benchmark
+platforms:
+  - rke2r
+baselines:
+  - version: rke2-cis-1.23
+    versions: ["1.23"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../rke2-cis-1.23
+  - version: rke2-cis-1.24
+    versions: ["1.24"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../rke2-cis-1.24
+  - version: rke2-cis-1.7
+    versions: ["1.25"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../rke2-cis-1.7
+  - version: rke2-cis-1.8
+    versions: ["1.26"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../rke2-cis-1.8
+  - version: rke2-cis-1.9
+    versions: ["1.27-1.29", "1.30-1.99"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../rke2-cis-1.9

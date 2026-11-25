@@ -1,0 +1,19 @@
+apiVersion: kube-bench.io/v1alpha1
+kind: BaselineManifest
+family: aks
+displayName: AKS Benchmark
+platforms:
+  - aks
+baselines:
+  - version: aks-1.0
+    versions: ["1.19-1.24"]
+    targets: [master, node, controlplane, policies, managedservices]
+    definitions: ../aks-1.0
+  - version: aks-1.7
+    versions: ["1.29-1.31"]
+    targets: [master, node, controlplane, policies, managedservices]
+    definitions: ../aks-1.7
+  - version: aks-1.8
+    versions: ["1.25-1.28", "1.32-1.99"]
+    targets: [master, node, controlplane, policies, managedservices]
+    definitions: ../aks-1.8

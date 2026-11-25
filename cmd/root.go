@@ -61,6 +61,12 @@ var (
 	outputFile           string
 	configFileError      error
 	controlsCollection   []*check.Controls
+
+	// Declarative multi-baseline support. These flags are additive; when
+	// baselineRequests is empty the historical single-baseline code path
+	// runs unchanged.
+	baselineRequests []string
+	baselineDirs     []string
 )
 
 // RootCmd represents the base command when called without any subcommands
@@ -69,6 +75,13 @@ var RootCmd = &cobra.Command{
 	Short: "Run CIS Benchmarks checks against a Kubernetes deployment",
 	Long:  `This tool runs the CIS Kubernetes Benchmark (https://www.cisecurity.org/benchmark/kubernetes/)`,
 	Run: func(cmd *cobra.Command, args []string) {
+		if len(baselineRequests) > 0 {
+			if err := runBaselines(baselineRequests, baselineDirs, nil); err != nil {
+				exitWithError(err)
+			}
+			os.Exit(exitCodeSelection(controlsCollection))
+		}
+
 		bv, err := getBenchmarkVersion(kubeVersion, benchmarkVersion, getPlatformInfo(), viper.GetViper())
 		if err != nil {
 			exitWithError(fmt.Errorf("unable to determine benchmark version: %v", err))
@@ -192,6 +205,16 @@ func init() {
 	RootCmd.PersistentFlags().StringVarP(&cfgDir, "config-dir", "D", cfgDir, "config directory")
 	RootCmd.PersistentFlags().StringVar(&kubeVersion, "version", "", "Manually specify Kubernetes version, automatically detected if unset")
 	RootCmd.PersistentFlags().StringVar(&benchmarkVersion, "benchmark", "", "Manually specify CIS benchmark version. It would be an error to specify both --version and --benchmark flags")
+
+	// Multi-baseline flags. --baseline may be repeated to merge several
+	// families/definition versions in one run; --baseline-dir adds registry
+	// roots holding fully external manifests and definitions.
+	RootCmd.PersistentFlags().StringSliceVar(&baselineRequests, "baseline", nil,
+		`Run a declarative baseline, selected as family[:cluster-version] or family@definition-version.
+May be specified multiple times to merge several baselines in one run.
+Example: --baseline cis:1.31 --baseline internal@internal-2025.1`)
+	RootCmd.PersistentFlags().StringSliceVar(&baselineDirs, "baseline-dir", nil,
+		"Additional registry directory containing a baselines/ manifest directory and external check definitions. May be specified multiple times.")
 
 	if err := goflag.Set("logtostderr", "true"); err != nil {
 		fmt.Printf("unable to set logtostderr: %+v\n", err)

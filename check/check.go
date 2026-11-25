@@ -85,6 +85,17 @@ type Check struct {
 	AuditEnvOutput    string `json:"-"`
 	AuditConfigOutput string `json:"-"`
 	DisableEnvTesting bool   `json:"-"`
+
+	// Additive provenance fields, populated only on the declarative
+	// multi-baseline path. Empty values are omitted so legacy output is
+	// byte for byte unchanged.
+	SourceFamily            string `json:"source_family,omitempty"`
+	SourceDefinitionVersion string `json:"source_definition_version,omitempty"`
+	SourceTarget            string `json:"source_target,omitempty"`
+	NormalizationKey        string `json:"normalization_key,omitempty"`
+	// Duplicate marks a repeated occurrence of the check under its source
+	// key. Duplicates are excluded from pass/fail/warn/info counters.
+	Duplicate bool `json:"duplicate,omitempty"`
 }
 
 // Runner wraps the basic Run method.

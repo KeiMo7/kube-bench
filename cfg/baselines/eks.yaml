@@ -1,0 +1,31 @@
+apiVersion: kube-bench.io/v1alpha1
+kind: BaselineManifest
+family: eks
+displayName: EKS Benchmark
+platforms:
+  - eks
+baselines:
+  - version: eks-1.0.1
+    versions: ["1.15-1.19"]
+    targets: [master, node, controlplane, policies, managedservices]
+    definitions: ../eks-1.0.1
+  - version: eks-1.1.0
+    versions: ["eks-1.1.0"]
+    targets: [master, node, controlplane, policies, managedservices]
+    definitions: ../eks-1.1.0
+  - version: eks-1.2.0
+    versions: ["eks-1.2.0"]
+    targets: [master, node, controlplane, policies, managedservices]
+    definitions: ../eks-1.2.0
+  - version: eks-1.5.0
+    versions: ["1.20-1.28"]
+    targets: [master, node, controlplane, policies, managedservices]
+    definitions: ../eks-1.5.0
+  - version: eks-1.7.0
+    versions: ["1.29-1.31"]
+    targets: [master, node, controlplane, policies, managedservices]
+    definitions: ../eks-1.7.0
+  - version: eks-1.8.0
+    versions: ["1.32-1.34"]
+    targets: [master, node, controlplane, policies, managedservices]
+    definitions: ../eks-1.8.0

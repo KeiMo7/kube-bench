@@ -1,0 +1,34 @@
+---
+controls:
+version: "internal-2025.1"
+id: 1
+text: "Internal Master Security Configuration"
+type: "master"
+groups:
+  - id: 1.1
+    text: "Control Plane Node Configuration Files"
+    checks:
+      - id: 1.1.1
+        text: "Ensure that the API server pod specification file permissions are set to 600 or more restrictive"
+        audit: "/bin/sh -c 'if test -e /etc/kubernetes/manifests/kube-apiserver.yaml; then stat -c permissions=%a /etc/kubernetes/manifests/kube-apiserver.yaml; fi'"
+        tests:
+          test_items:
+            - flag: "permissions"
+              compare:
+                op: bitmask
+                value: "600"
+        remediation: |
+          Run on the control plane node:
+          chmod 600 /etc/kubernetes/manifests/kube-apiserver.yaml
+        scored: true
+
+      - id: 1.1.2
+        text: "Ensure that the API server pod specification file ownership is root:root"
+        audit: "/bin/sh -c 'if test -e /etc/kubernetes/manifests/kube-apiserver.yaml; then stat -c %U:%G /etc/kubernetes/manifests/kube-apiserver.yaml; fi'"
+        tests:
+          test_items:
+            - flag: "root:root"
+        remediation: |
+          Run on the control plane node:
+          chown root:root /etc/kubernetes/manifests/kube-apiserver.yaml
+        scored: true

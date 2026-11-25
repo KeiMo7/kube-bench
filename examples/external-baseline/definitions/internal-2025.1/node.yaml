@@ -1,0 +1,39 @@
+---
+controls:
+version: "internal-2025.1"
+id: 4
+text: "Internal Worker Node Security Configuration"
+type: "node"
+groups:
+  - id: 4.1
+    text: "Worker Node Configuration Files"
+    checks:
+      # Deliberately reuses check number 1.1.1 with a different expected
+      # value, to demonstrate cross-family semantic conflict marking.
+      - id: 1.1.1
+        text: "Ensure worker kubelet configuration file permissions are 644 or more restrictive"
+        audit: "/bin/sh -c 'if test -e /var/lib/kubelet/config.yaml; then stat -c permissions=%a /var/lib/kubelet/config.yaml; fi'"
+        tests:
+          test_items:
+            - flag: "permissions"
+              compare:
+                op: bitmask
+                value: "644"
+        remediation: |
+          Run on each worker node:
+          chmod 644 /var/lib/kubelet/config.yaml
+        scored: true
+
+      - id: 4.1.1
+        text: "Ensure that the kubelet service file permissions are 644 or more restrictive"
+        audit: "/bin/sh -c 'if test -e /etc/systemd/system/kubelet.service; then stat -c permissions=%a /etc/systemd/system/kubelet.service; fi'"
+        tests:
+          test_items:
+            - flag: "permissions"
+              compare:
+                op: bitmask
+                value: "644"
+        remediation: |
+          Run on each worker node:
+          chmod 644 /etc/systemd/system/kubelet.service
+        scored: true

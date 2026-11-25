@@ -54,6 +54,15 @@ type Controls struct {
 	Type            NodeType `json:"node_type"`
 	Groups          []*Group `json:"tests"`
 	Summary
+
+	// Additive provenance fields. They are only populated by the
+	// declarative multi-baseline path; the legacy single-baseline path
+	// leaves them empty and omitempty keeps the historical JSON byte
+	// sequence identical.
+	SourceFamily            string `json:"source_family,omitempty"`
+	SourceDefinitionVersion string `json:"source_definition_version,omitempty"`
+	SourceTarget            string `json:"source_target,omitempty"`
+	NormalizationKey        string `json:"normalization_key,omitempty"`
 }
 
 // Group is a collection of similar checks.

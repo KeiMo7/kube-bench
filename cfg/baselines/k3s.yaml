@@ -1,0 +1,35 @@
+apiVersion: kube-bench.io/v1alpha1
+kind: BaselineManifest
+family: k3s
+displayName: K3s Benchmark
+platforms:
+  - k3s
+baselines:
+  - version: k3s-cis-1.23
+    versions: ["1.22-1.23"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../k3s-cis-1.23
+  - version: k3s-cis-1.24
+    versions: ["1.24"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../k3s-cis-1.24
+  - version: k3s-cis-1.7
+    versions: ["1.25"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../k3s-cis-1.7
+  - version: k3s-cis-1.8
+    versions: ["1.26"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../k3s-cis-1.8
+  - version: k3s-cis-1.9
+    versions: ["1.27"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../k3s-cis-1.9
+  - version: k3s-cis-1.10
+    versions: ["1.28"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../k3s-cis-1.10
+  - version: k3s-cis-1.11
+    versions: ["1.29-1.32", "1.33-1.99"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../k3s-cis-1.11

@@ -1,0 +1,79 @@
+apiVersion: kube-bench.io/v1alpha1
+kind: BaselineManifest
+family: cis
+displayName: CIS Kubernetes Benchmark
+platforms:
+  - cis
+# No default is declared: an unmatched version must fail rather than
+# silently picking an arbitrary benchmark.
+baselines:
+  - version: cis-1.5
+    displayName: CIS 1.5
+    versions: ["1.15"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.5
+  - version: cis-1.6
+    displayName: CIS 1.6
+    versions: ["1.16-1.18"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.6
+  - version: cis-1.20
+    displayName: CIS 1.20
+    versions: ["1.19-1.21"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.20
+  - version: cis-1.23
+    displayName: CIS 1.23
+    versions: ["1.22-1.23"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.23
+  - version: cis-1.24
+    displayName: CIS 1.24
+    versions: ["1.24"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.24
+  - version: cis-1.7
+    displayName: CIS 1.7
+    versions: ["1.25"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.7
+  - version: cis-1.8
+    displayName: CIS 1.8
+    versions: ["1.26"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.8
+  - version: cis-1.9
+    displayName: CIS 1.9
+    versions: ["1.27"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.9
+  - version: cis-1.10
+    displayName: CIS 1.10
+    versions: ["1.28"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.10
+  - version: cis-1.11
+    displayName: CIS 1.11
+    versions: ["1.29-1.31"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.11
+  - version: cis-1.12
+    displayName: CIS 1.12
+    versions: ["1.32-1.33"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.12
+  - version: cis-2.0
+    displayName: CIS 2.0
+    versions: ["1.34-1.35"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-2.0
+  - version: cis-1.6-k3s
+    displayName: CIS 1.6 K3s
+    versions: ["cis-1.6-k3s"]
+    targets: [master, node, controlplane, etcd, policies]
+    definitions: ../cis-1.6-k3s
+  - version: cis-1.24-microk8s
+    displayName: CIS 1.24 MicroK8s
+    versions: ["cis-1.24-microk8s"]
+    targets: [master, etcd, node, controlplane, policies]
+    definitions: ../cis-1.24-microk8s

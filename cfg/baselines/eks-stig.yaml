@@ -1,0 +1,9 @@
+apiVersion: kube-bench.io/v1alpha1
+kind: BaselineManifest
+family: eks-stig
+displayName: EKS Kubernetes STIG Benchmark
+baselines:
+  - version: eks-stig-kubernetes-v1r6
+    versions: ["eks-stig-kubernetes-v1r6"]
+    targets: [node, controlplane, policies, managedservices]
+    definitions: ../eks-stig-kubernetes-v1r6

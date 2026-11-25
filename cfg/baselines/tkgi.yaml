@@ -1,0 +1,11 @@
+apiVersion: kube-bench.io/v1alpha1
+kind: BaselineManifest
+family: tkgi
+displayName: VMware Tanzu Kubernetes Grid Integrated Edition Benchmark
+platforms:
+  - vmware
+baselines:
+  - version: tkgi-1.2.53
+    versions: ["tkgi-1.2.53"]
+    targets: [master, etcd, controlplane, node, policies]
+    definitions: ../tkgi-1.2.53
